@@ -44,6 +44,13 @@ interface ExtractedFacebookListing {
   imageUrl?: string;
 }
 
+interface ExtractedFacebookCard {
+  title?: string;
+  url: string;
+  textLines: string[];
+  imageUrl?: string;
+}
+
 /** Real cloud-browser implementation with deterministic marketplace recipes. */
 export class SteelBrowserAgent implements BrowserAgent {
   private readonly client: Steel;
@@ -330,30 +337,52 @@ function waitForAbortableDelay(delayMs: number, signal: AbortSignal): Promise<vo
 }
 
 async function extractFacebookListings(page: Page): Promise<ExtractedFacebookListing[]> {
-  return page.locator('a[href*="/marketplace/item/"]').evaluateAll((anchors: Element[]) => {
-    const seenUrls = new Set<string>();
-    return anchors.slice(0, 48).flatMap((element) => {
+  const cards = await page.locator('a[href*="/marketplace/item/"]').evaluateAll((anchors: Element[]): ExtractedFacebookCard[] =>
+    anchors.slice(0, 48).flatMap((element) => {
       const anchor = element as HTMLAnchorElement;
-      if (!anchor.href || seenUrls.has(anchor.href)) return [];
-      seenUrls.add(anchor.href);
+      if (!anchor.href) return [];
 
       const textLines = (anchor.innerText || anchor.textContent || "")
         .split("\n")
         .map((line) => line.trim())
         .filter(Boolean);
-      const title = anchor.getAttribute("aria-label")?.trim()
-        || (anchor.querySelector("img") as HTMLImageElement | null)?.alt?.trim()
-        || textLines.find((line) => !/^[$£€]?\s*\d/.test(line));
-      if (!title || title.length < 2) return [];
-
       return [{
-        title,
+        title: anchor.getAttribute("aria-label")?.trim()
+          || (anchor.querySelector("img") as HTMLImageElement | null)?.alt?.trim()
+          || textLines.find((line) => !/^[$£€]?\s*\d/.test(line)),
         url: anchor.href,
-        priceText: textLines.find((line) => /^[$£€]?\s*\d/.test(line)),
+        textLines,
         imageUrl: (anchor.querySelector("img") as HTMLImageElement | null)?.src
       }];
-    });
+    })
+  );
+
+  const seenUrls = new Set<string>();
+  return cards.flatMap((card) => {
+    if (!card.title || card.title.length < 2 || seenUrls.has(card.url)) return [];
+    seenUrls.add(card.url);
+    return [{
+      title: card.title,
+      url: card.url,
+      priceText: extractFacebookPriceText(card.textLines),
+      imageUrl: card.imageUrl
+    }];
   });
+}
+
+/**
+ * Facebook cards commonly contain counts such as "1 bedroom" before their
+ * actual rent. Only accept a currency-marked amount (or "Free") as a price.
+ */
+export function extractFacebookPriceText(textLines: string[]): string | undefined {
+  for (const line of textLines) {
+    if (/^free$/i.test(line.trim())) return "0";
+    const currencyPrice = line.match(/(?:(?:CA|US|C)\s*)?[$€£]\s*\d[\d,]*(?:\.\d{1,2})?/i);
+    if (currencyPrice) return currencyPrice[0];
+    const codedCurrencyPrice = line.match(/\b\d[\d,]*(?:\.\d{1,2})?\s*(?:CAD|USD|EUR|GBP)\b/i);
+    if (codedCurrencyPrice) return codedCurrencyPrice[0];
+  }
+  return undefined;
 }
 
 async function pageRequiresLogin(page: Page): Promise<boolean> {

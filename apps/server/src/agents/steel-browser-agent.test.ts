@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseSearchIntent } from "../query-parser.js";
-import { createEbaySearchUrl, createFacebookSearchUrl, createKijijiSearchUrl } from "./steel-browser-agent.js";
+import { createEbaySearchUrl, createFacebookSearchUrl, createKijijiSearchUrl, extractFacebookPriceText } from "./steel-browser-agent.js";
 
 describe("marketplace browser recipes", () => {
   it("uses the original request without imposing marketplace filters", () => {
@@ -30,5 +30,11 @@ describe("marketplace browser recipes", () => {
 
     expect(url.origin + url.pathname).toBe("https://www.facebook.com/marketplace/search/");
     expect(url.searchParams.get("query")).toBe("used road bike");
+  });
+
+  it("extracts currency-marked rent instead of a bedroom count", () => {
+    expect(extractFacebookPriceText(["1 bedroom apartment near UofT", "$2,400 / month", "Toronto, ON"])).toBe("$2,400");
+    expect(extractFacebookPriceText(["2 bedroom condo", "CA$1,850 monthly"])).toBe("CA$1,850");
+    expect(extractFacebookPriceText(["3 bedroom apartment", "Toronto, ON"])).toBeUndefined();
   });
 });
