@@ -3,11 +3,12 @@ import Fastify from "fastify";
 
 import { DEFAULT_SOURCES, createSearchRequestSchema } from "@gehackathon/shared";
 
-import { parseSearchIntent } from "./query-parser.js";
+import { createQueryParser, type QueryParser } from "./query-parser-service.js";
 import { SearchJobManager } from "./search-jobs.js";
 
 export interface BuildAppOptions {
   jobs?: SearchJobManager;
+  queryParser?: QueryParser;
 }
 
 function formatSseEvent(event: unknown): string {
@@ -17,12 +18,16 @@ function formatSseEvent(event: unknown): string {
 export function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: true });
   const jobs = options.jobs ?? new SearchJobManager();
+  const queryParser = options.queryParser ?? createQueryParser();
 
   void app.register(cors, { origin: true });
 
   app.get("/health", async () => ({
     status: "ok",
-    service: "gehackathon-server"
+    service: "gehackathon-server",
+    mode: process.env.MOCK_AGENTS === "false" ? "live" : "mock",
+    steelConfigured: Boolean(process.env.STEEL_API_KEY),
+    llmConfigured: Boolean(process.env.OPENAI_API_KEY)
   }));
 
   // This gives the extension a stable development contract before agent work begins.
@@ -41,7 +46,8 @@ export function buildApp(options: BuildAppOptions = {}) {
       return reply.code(400).send({ error: "One or more marketplace sources are unknown" });
     }
 
-    const job = jobs.start(parseSearchIntent(parsed.data.query), sources);
+    const intent = await queryParser.parse(parsed.data.query);
+    const job = jobs.start(intent, sources);
     return { jobId: job.id };
   });
 

@@ -26,6 +26,7 @@ export interface SearchJobManagerOptions {
   mockAgents?: boolean;
   mockDelayMs?: number;
   sourceTimeoutMs?: number;
+  sourceRetryCount?: number;
 }
 
 export class SearchJobManager {
@@ -33,10 +34,12 @@ export class SearchJobManager {
   private nextJobNumber = 1;
   private readonly agent: BrowserAgent;
   private readonly sourceTimeoutMs: number;
+  private readonly sourceRetryCount: number;
 
   constructor(options: SearchJobManagerOptions = {}) {
     this.agent = options.agent ?? createBrowserAgent(options);
     this.sourceTimeoutMs = options.sourceTimeoutMs ?? 90_000;
+    this.sourceRetryCount = options.sourceRetryCount ?? 1;
   }
 
   start(intent: SearchIntent, sources: MarketplaceSource[]): SearchJob {
@@ -97,18 +100,7 @@ export class SearchJobManager {
     let listings: Listing[] = [];
 
     try {
-      const rawListings = await Promise.race([
-        this.agent.search(source, job.intent, {
-          sourceIndex,
-          signal: controller.signal,
-          reportStatus: (status, message, liveSessionUrl) => {
-            if (!controller.signal.aborted) {
-              this.emit(job, { type: "source_status", sourceId: source.id, status, message, liveSessionUrl });
-            }
-          }
-        }),
-        timeoutPromise
-      ]);
+      const rawListings = await this.searchWithRetry(job, source, sourceIndex, controller, timeoutPromise);
       listings = rankListings(dedupeListings(rawListings, job.listings), job.intent);
       job.listings = rankListings([...job.listings, ...listings], job.intent);
       this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
@@ -128,5 +120,41 @@ export class SearchJobManager {
   private emit(job: StoredSearchJob, event: SearchEvent): void {
     job.events.push(event);
     for (const listener of job.listeners) listener(event);
+  }
+
+  private async searchWithRetry(
+    job: StoredSearchJob,
+    source: MarketplaceSource,
+    sourceIndex: number,
+    controller: AbortController,
+    timeoutPromise: Promise<never>
+  ): Promise<Listing[]> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.sourceRetryCount; attempt += 1) {
+      try {
+        return await Promise.race([
+          this.agent.search(source, job.intent, {
+            sourceIndex,
+            signal: controller.signal,
+            reportStatus: (status, message, liveSessionUrl) => {
+              if (!controller.signal.aborted) {
+                this.emit(job, { type: "source_status", sourceId: source.id, status, message, liveSessionUrl });
+              }
+            }
+          }),
+          timeoutPromise
+        ]);
+      } catch (error) {
+        lastError = error;
+        if (controller.signal.aborted || attempt === this.sourceRetryCount) throw error;
+        this.emit(job, {
+          type: "source_status",
+          sourceId: source.id,
+          status: "searching",
+          message: `Retrying marketplace search (${attempt + 1}/${this.sourceRetryCount})…`
+        });
+      }
+    }
+    throw lastError;
   }
 }

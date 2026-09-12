@@ -36,4 +36,22 @@ describe("SearchJobManager", () => {
     });
     expect(job.events.at(-1)).toEqual({ type: "job_complete", jobId: job.id });
   });
+
+  it("retries a recoverable source failure once", async () => {
+    let attempts = 0;
+    const flakyAgent: BrowserAgent = {
+      async search() {
+        attempts += 1;
+        if (attempts === 1) throw new Error("temporary upstream failure");
+        return [];
+      }
+    };
+    const jobs = new SearchJobManager({ agent: flakyAgent, sourceRetryCount: 1 });
+    const job = jobs.start(parseSearchIntent("used desk"), [DEFAULT_SOURCES[1]]);
+
+    await job.done;
+
+    expect(attempts).toBe(2);
+    expect(job.events).toContainEqual(expect.objectContaining({ message: "Retrying marketplace search (1/1)…" }));
+  });
 });

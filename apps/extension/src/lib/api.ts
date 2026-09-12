@@ -1,4 +1,4 @@
-import type { Listing, MarketplaceSource, SearchEvent } from "@gehackathon/shared";
+import type { Listing, MarketplaceSource, SearchEvent, SearchJobSnapshot } from "@gehackathon/shared";
 import { defaultSources } from "./sources";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
@@ -8,6 +8,7 @@ const mockJobs = new Map<string, string[]>();
 export interface SearchApi {
   getSources(): Promise<MarketplaceSource[]>;
   startSearch(query: string, sources: string[]): Promise<{ jobId: string }>;
+  getSearchJob(jobId: string): Promise<SearchJobSnapshot>;
   subscribe(jobId: string, onEvent: (event: SearchEvent) => void, onError: (error: Error) => void): () => void;
   isMock: boolean;
 }
@@ -89,6 +90,19 @@ export const searchApi: SearchApi = {
     });
     if (!response.ok) throw new Error("Could not start this search.");
     return response.json() as Promise<{ jobId: string }>;
+  },
+  async getSearchJob(jobId) {
+    if (mockMode) {
+      return {
+        jobId,
+        status: "complete",
+        intent: { rawQuery: "demo", item: "dumbbells", condition: "any" },
+        listings: (mockJobs.get(jobId) ?? []).flatMap((sourceId) => listingsBySource[sourceId] ?? []),
+      };
+    }
+    const response = await fetch(`${baseUrl}/search/${jobId}`);
+    if (!response.ok) throw new Error("Could not load the completed search results.");
+    return response.json() as Promise<SearchJobSnapshot>;
   },
   subscribe(jobId, onEvent, onError) {
     if (mockMode) return mockSubscription(jobId, mockJobs.get(jobId) ?? [], onEvent);

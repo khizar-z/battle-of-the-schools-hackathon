@@ -33,6 +33,7 @@ export type SearchAction =
   | { type: "set_sources"; sourceIds: string[] }
   | { type: "toggle_source"; sourceId: string }
   | { type: "start"; jobId: string; sourceIds: string[] }
+  | { type: "replace_listings"; listings: Listing[] }
   | { type: "event"; event: SearchEvent }
   | { type: "error"; message: string };
 
@@ -71,6 +72,8 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
         listings: [],
         sourceProgress: Object.fromEntries(action.sourceIds.map((id) => [id, { phase: "idle", count: 0 }])),
       };
+    case "replace_listings":
+      return { ...state, listings: action.listings };
     case "error":
       return { ...state, status: "error", error: action.message };
     case "event": {

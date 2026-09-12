@@ -56,7 +56,9 @@ function ActivityPanel({ sources, selectedIds, progress }: { sources: Marketplac
 function ListingCard({ listing }: { listing: Listing }) {
   return (
     <article className="listing-card">
-      <div className="listing-image" aria-hidden="true"><span>{listing.title.split(" ")[0].slice(0, 1)}</span></div>
+      <div className="listing-image">
+        {listing.imageUrl ? <img src={listing.imageUrl} alt="" /> : <span aria-hidden="true">{listing.title.split(" ")[0].slice(0, 1)}</span>}
+      </div>
       <div className="listing-content">
         <div className="card-topline"><span className="badge">{listing.sourceName}</span>{listing.postedAt && <span className="freshness">{listing.postedAt}</span>}</div>
         <h3>{listing.title}</h3>
@@ -105,7 +107,14 @@ export function App() {
       dispatch({ type: "start", jobId, sourceIds: state.selectedSourceIds });
       cancelSubscription.current = searchApi.subscribe(
         jobId,
-        (searchEvent) => dispatch({ type: "event", event: searchEvent }),
+        (searchEvent) => {
+          dispatch({ type: "event", event: searchEvent });
+          if (searchEvent.type === "job_complete") {
+            void searchApi.getSearchJob(jobId)
+              .then((snapshot) => dispatch({ type: "replace_listings", listings: snapshot.listings }))
+              .catch(() => undefined);
+          }
+        },
         (error) => dispatch({ type: "error", message: error.message }),
       );
     } catch (error) {

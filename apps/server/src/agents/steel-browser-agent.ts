@@ -3,6 +3,7 @@ import { chromium, type Page } from "playwright-core";
 import Steel from "steel-sdk";
 
 import { BrowserAgentError, type AgentSearchContext, type BrowserAgent } from "./browser-agent.js";
+import type { RecipeStore, SiteRecipe } from "../recipes/recipe-store.js";
 
 const SESSION_TIMEOUT_MS = 120_000;
 const PAGE_TIMEOUT_MS = 30_000;
@@ -10,6 +11,7 @@ const PAGE_TIMEOUT_MS = 30_000;
 interface SteelBrowserAgentOptions {
   apiKey: string;
   sessionTimeoutMs?: number;
+  recipeStore: RecipeStore;
 }
 
 interface ExtractedEbayListing {
@@ -33,18 +35,16 @@ export class SteelBrowserAgent implements BrowserAgent {
   private readonly client: Steel;
   private readonly apiKey: string;
   private readonly sessionTimeoutMs: number;
+  private readonly recipeStore: RecipeStore;
 
   constructor(options: SteelBrowserAgentOptions) {
     this.apiKey = options.apiKey;
     this.sessionTimeoutMs = options.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
+    this.recipeStore = options.recipeStore;
     this.client = new Steel({ steelAPIKey: this.apiKey });
   }
 
   async search(source: MarketplaceSource, intent: SearchIntent, context: AgentSearchContext): Promise<Listing[]> {
-    if (source.id !== "ebay" && source.id !== "kijiji") {
-      throw new BrowserAgentError(`${source.name} does not have a browser recipe yet.`);
-    }
-
     let sessionId: string | undefined;
     let browser: Awaited<ReturnType<typeof chromium.connectOverCDP>> | undefined;
 
@@ -62,8 +62,11 @@ export class SteelBrowserAgent implements BrowserAgent {
       if (!browserContext) throw new BrowserAgentError("Steel session did not expose a browser context.");
       const page = browserContext.pages()[0] ?? (await browserContext.newPage());
 
+      const recipe = await this.recipeStore.get(source.domain);
       const isEbay = source.id === "ebay";
-      await page.goto(isEbay ? createEbaySearchUrl(intent) : createKijijiSearchUrl(intent), {
+      const isKijiji = source.id === "kijiji";
+      const destination = isEbay ? createEbaySearchUrl(intent) : isKijiji ? createKijijiSearchUrl(intent) : sourceHomeUrl(source);
+      await page.goto(destination, {
         waitUntil: "domcontentloaded",
         timeout: PAGE_TIMEOUT_MS
       });
@@ -71,16 +74,26 @@ export class SteelBrowserAgent implements BrowserAgent {
       context.reportStatus("extracting", `Reading ${source.name} listing cards…`, session.sessionViewerUrl || session.debugUrl);
 
       if (isEbay) {
-        await page.waitForSelector("li.s-item", { timeout: PAGE_TIMEOUT_MS });
+        await page.waitForSelector(recipe?.resultSelector ?? "li.s-item", { timeout: PAGE_TIMEOUT_MS });
         const extracted = await extractEbayListings(page);
-        return extracted.map((listing, index) => normalizeEbayListing(listing, source, intent, index));
+        const listings = extracted.map((listing, index) => normalizeEbayListing(listing, source, intent, index));
+        await this.recipeStore.save(defaultRecipe(source));
+        return listings;
       }
 
-      await page.waitForSelector('[data-testid="listing-link"]', { timeout: PAGE_TIMEOUT_MS });
-      const extracted = await extractKijijiListings(page);
-      return extracted
-        .map((listing, index) => normalizeKijijiListing(listing, source, index))
-        .filter((listing) => isWithinPriceRange(listing, intent));
+      if (isKijiji) {
+        await page.waitForSelector(recipe?.resultSelector ?? '[data-testid="listing-link"]', { timeout: PAGE_TIMEOUT_MS });
+        const extracted = await extractKijijiListings(page);
+        const listings = extracted
+          .map((listing, index) => normalizeKijijiListing(listing, source, index))
+          .filter((listing) => isWithinPriceRange(listing, intent));
+        await this.recipeStore.save(defaultRecipe(source));
+        return listings;
+      }
+
+      const discovered = await discoverGenericSearch(page, source, intent);
+      await this.recipeStore.save(discovered.recipe);
+      return discovered.listings;
     } catch (error) {
       if (error instanceof BrowserAgentError) throw error;
       throw new BrowserAgentError(`Steel browser search failed: ${errorMessage(error)}`);
@@ -89,6 +102,69 @@ export class SteelBrowserAgent implements BrowserAgent {
       if (sessionId) await this.client.sessions.release(sessionId).catch(() => undefined);
     }
   }
+}
+
+function sourceHomeUrl(source: MarketplaceSource): string {
+  return source.domain.startsWith("http") ? source.domain : `https://${source.domain}`;
+}
+
+function defaultRecipe(source: MarketplaceSource): SiteRecipe {
+  const ebay = source.id === "ebay";
+  return {
+    domain: source.domain,
+    searchUrlTemplate: ebay ? "https://www.ebay.ca/sch/i.html?_nkw={query}" : "https://www.kijiji.ca/b-gta-greater-toronto-area/{query}/k0l1700272",
+    searchSteps: [{ action: "navigate", target: ebay ? "eBay search URL" : "Kijiji Toronto search URL" }],
+    resultSelector: ebay ? "li.s-item" : '[data-testid="listing-link"]',
+    fieldSelectors: ebay
+      ? { title: ".s-item__title", price: ".s-item__price", image: ".s-item__image-img", url: "a.s-item__link" }
+      : { title: '[data-testid="listing-title"]', price: '[data-testid="listing-price"]', location: '[data-testid="listing-location"]', url: '[data-testid="listing-link"]' },
+    learnedAt: new Date().toISOString()
+  };
+}
+
+async function discoverGenericSearch(page: Page, source: MarketplaceSource, intent: SearchIntent): Promise<{ listings: Listing[]; recipe: SiteRecipe }> {
+  const inputSelector = '[role="searchbox"], input[type="search"], input[name="q"], input[name="query"], input[placeholder*="Search" i]';
+  const searchInput = page.locator(inputSelector).first();
+  if (!(await searchInput.isVisible().catch(() => false))) {
+    throw new BrowserAgentError(`${source.name} does not expose a discoverable search box.`);
+  }
+  await searchInput.fill(intent.item);
+  await searchInput.press("Enter");
+  await page.waitForLoadState("domcontentloaded", { timeout: PAGE_TIMEOUT_MS }).catch(() => undefined);
+
+  const resultSelector = 'article a[href], [data-testid*="listing"] a[href], li a[href]';
+  const links = await page.locator(resultSelector).evaluateAll((elements: Element[]) =>
+    elements.slice(0, 24).flatMap((element) => {
+      const anchor = element as HTMLAnchorElement;
+      const title = anchor.textContent?.trim();
+      if (!title || !anchor.href || title.length < 3) return [];
+      return [{ title, url: anchor.href }];
+    })
+  );
+  if (!links.length) throw new BrowserAgentError(`${source.name} search completed but no listing links were discovered.`);
+
+  const extractedAt = new Date().toISOString();
+  return {
+    listings: links.map((link, index) => ({
+      id: new URL(link.url).pathname.split("/").filter(Boolean).at(-1) ?? `${source.id}-${index}`,
+      sourceId: source.id,
+      sourceName: source.name,
+      title: link.title,
+      url: link.url,
+      extractedAt,
+      confidence: 0.45
+    })),
+    recipe: {
+      domain: source.domain,
+      searchSteps: [
+        { action: "fill", target: inputSelector },
+        { action: "press", target: "Enter" }
+      ],
+      resultSelector,
+      fieldSelectors: { title: "a[href]", url: "a[href]" },
+      learnedAt: extractedAt
+    }
+  };
 }
 
 export function createEbaySearchUrl(intent: SearchIntent): string {

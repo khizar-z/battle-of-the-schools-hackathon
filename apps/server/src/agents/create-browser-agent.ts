@@ -1,11 +1,13 @@
 import { BrowserAgentError, type BrowserAgent } from "./browser-agent.js";
 import { MockBrowserAgent } from "./mock-browser-agent.js";
 import { SteelBrowserAgent } from "./steel-browser-agent.js";
+import { createRecipeStore, type RecipeStore } from "../recipes/recipe-store.js";
 
 export interface CreateBrowserAgentOptions {
   mockAgents?: boolean;
   mockDelayMs?: number;
   steelApiKey?: string;
+  recipeStore?: RecipeStore;
 }
 
 export function createBrowserAgent(options: CreateBrowserAgentOptions = {}): BrowserAgent {
@@ -21,6 +23,5 @@ export function createBrowserAgent(options: CreateBrowserAgentOptions = {}): Bro
     };
   }
 
-  return new SteelBrowserAgent({ apiKey: steelApiKey });
+  return new SteelBrowserAgent({ apiKey: steelApiKey, recipeStore: options.recipeStore ?? createRecipeStore() });
 }
-

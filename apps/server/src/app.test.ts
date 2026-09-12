@@ -14,7 +14,7 @@ describe("server", () => {
     const response = await app.inject({ method: "GET", url: "/health" });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok", service: "gehackathon-server" });
+    expect(response.json()).toMatchObject({ status: "ok", service: "gehackathon-server", mode: "mock" });
   });
 
   it("returns the initial marketplace catalog", async () => {
