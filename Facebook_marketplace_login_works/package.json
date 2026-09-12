@@ -1,0 +1,14 @@
+{
+  "name": "steel-facebook-marketplace-login",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Human-in-the-loop Facebook Marketplace login reference using Steel profiles.",
+  "scripts": {
+    "login": "node src/login.js"
+  },
+  "dependencies": {
+    "playwright": "^1.58.0",
+    "steel-sdk": "^0.18.0"
+  }
+}

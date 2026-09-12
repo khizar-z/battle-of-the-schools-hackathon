@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseSearchIntent } from "../query-parser.js";
-import { createEbaySearchUrl, createKijijiSearchUrl } from "./steel-browser-agent.js";
+import { createEbaySearchUrl, createFacebookSearchUrl, createKijijiSearchUrl } from "./steel-browser-agent.js";
 
 describe("marketplace browser recipes", () => {
   it("builds an eBay query with supported price and condition filters", () => {
@@ -17,5 +17,12 @@ describe("marketplace browser recipes", () => {
     expect(createKijijiSearchUrl(parseSearchIntent("used dumbbells near downtown Toronto"))).toBe(
       "https://www.kijiji.ca/b-gta-greater-toronto-area/dumbbells/k0l1700272"
     );
+  });
+
+  it("builds a Facebook Marketplace search URL after login is available", () => {
+    const url = new URL(createFacebookSearchUrl(parseSearchIntent("used road bike")));
+
+    expect(url.origin + url.pathname).toBe("https://www.facebook.com/marketplace/search/");
+    expect(url.searchParams.get("query")).toBe("road bike");
   });
 });

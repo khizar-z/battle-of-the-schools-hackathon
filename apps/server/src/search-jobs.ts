@@ -26,6 +26,7 @@ export interface SearchJobManagerOptions {
   mockAgents?: boolean;
   mockDelayMs?: number;
   sourceTimeoutMs?: number;
+  facebookLoginTimeoutMs?: number;
   sourceRetryCount?: number;
 }
 
@@ -34,11 +35,13 @@ export class SearchJobManager {
   private nextJobNumber = 1;
   private readonly agent: BrowserAgent;
   private readonly sourceTimeoutMs: number;
+  private readonly facebookLoginTimeoutMs: number;
   private readonly sourceRetryCount: number;
 
   constructor(options: SearchJobManagerOptions = {}) {
     this.agent = options.agent ?? createBrowserAgent(options);
     this.sourceTimeoutMs = options.sourceTimeoutMs ?? 90_000;
+    this.facebookLoginTimeoutMs = options.facebookLoginTimeoutMs ?? positiveIntegerFromEnvironment("FACEBOOK_LOGIN_TIMEOUT_MS", 900_000);
     this.sourceRetryCount = options.sourceRetryCount ?? 1;
   }
 
@@ -93,6 +96,7 @@ export class SearchJobManager {
     const timeoutPromise = new Promise<never>((_, reject) => {
       rejectTimeout = reject;
     });
+    const timeoutMs = source.id === "facebook" ? Math.max(this.sourceTimeoutMs, this.facebookLoginTimeoutMs) : this.sourceTimeoutMs;
     const timeout = setTimeout(() => {
       controller.abort(timeoutError);
       rejectTimeout(timeoutError);
@@ -157,4 +161,11 @@ export class SearchJobManager {
     }
     throw lastError;
   }
+}
+
+function positiveIntegerFromEnvironment(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 60_000 ? parsed : fallback;
 }

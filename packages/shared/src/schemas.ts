@@ -59,7 +59,7 @@ export const searchEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("source_status"),
     sourceId: z.string().min(1),
-    status: z.enum(["searching", "extracting", "complete", "error"]),
+    status: z.enum(["searching", "extracting", "complete", "error", "needs_login"]),
     message: z.string().min(1).optional(),
     liveSessionUrl: z.string().url().optional()
   }),

@@ -5,4 +5,5 @@ coverage/
 .env.local
 *.log
 data/site-recipes.json
+data/facebook-marketplace-profile.json
 .DS_Store

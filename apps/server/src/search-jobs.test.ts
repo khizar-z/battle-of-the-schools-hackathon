@@ -54,4 +54,25 @@ describe("SearchJobManager", () => {
     expect(attempts).toBe(2);
     expect(job.events).toContainEqual(expect.objectContaining({ message: "Retrying marketplace search (1/1)…" }));
   });
+
+  it("forwards a human-in-the-loop login status to the client", async () => {
+    const loginAwareAgent: BrowserAgent = {
+      async search(_source, _intent, context) {
+        context.reportStatus("needs_login", "Sign in in the live browser", "https://viewer.example.test/session");
+        return [];
+      }
+    };
+    const jobs = new SearchJobManager({ agent: loginAwareAgent });
+    const job = jobs.start(parseSearchIntent("used desk"), [DEFAULT_SOURCES[0]]);
+
+    await job.done;
+
+    expect(job.events).toContainEqual({
+      type: "source_status",
+      sourceId: "facebook",
+      status: "needs_login",
+      message: "Sign in in the live browser",
+      liveSessionUrl: "https://viewer.example.test/session"
+    });
+  });
 });
