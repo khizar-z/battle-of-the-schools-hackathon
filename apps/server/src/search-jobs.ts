@@ -2,6 +2,7 @@ import type { Listing, MarketplaceSource, SearchEvent, SearchIntent } from "@geh
 
 import type { BrowserAgent } from "./agents/browser-agent.js";
 import { createBrowserAgent } from "./agents/create-browser-agent.js";
+import { dedupeListings, rankListings } from "./ranking/listings.js";
 
 export type SearchJobStatus = "running" | "complete";
 
@@ -10,6 +11,7 @@ export interface SearchJob {
   intent: SearchIntent;
   sources: MarketplaceSource[];
   events: SearchEvent[];
+  listings: Listing[];
   status: SearchJobStatus;
   done: Promise<void>;
 }
@@ -48,6 +50,7 @@ export class SearchJobManager {
       intent,
       sources,
       events: [],
+      listings: [],
       status: "running",
       done,
       resolveDone,
@@ -94,7 +97,7 @@ export class SearchJobManager {
     let listings: Listing[] = [];
 
     try {
-      listings = await Promise.race([
+      const rawListings = await Promise.race([
         this.agent.search(source, job.intent, {
           sourceIndex,
           signal: controller.signal,
@@ -106,6 +109,8 @@ export class SearchJobManager {
         }),
         timeoutPromise
       ]);
+      listings = rankListings(dedupeListings(rawListings, job.listings), job.intent);
+      job.listings = rankListings([...job.listings, ...listings], job.intent);
       this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
     } catch (error) {
       this.emit(job, {

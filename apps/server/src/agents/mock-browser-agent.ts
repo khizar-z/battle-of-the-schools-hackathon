@@ -36,6 +36,8 @@ function createMockListings(source: MarketplaceSource, intent: SearchIntent): Li
   const price = intent.maxPrice === 0 ? 0 : Math.min(basePrice, intent.maxPrice ?? basePrice);
   const location = intent.location?.raw ?? "Toronto, ON";
   const path = source.domain.replace(/^https?:\/\//, "").replace(/\/$/, "");
+  const sourceQualifier =
+    source.id === "ebay" ? "shipping available" : source.id === "kijiji" ? "nearby pickup" : "local seller";
 
   return [1, 2].map((number) => {
     const candidatePrice = price + (number - 1) * 5;
@@ -44,7 +46,7 @@ function createMockListings(source: MarketplaceSource, intent: SearchIntent): Li
       id: `${source.id}-mock-${number}`,
       sourceId: source.id,
       sourceName: source.name,
-      title: `${intent.item} — ${number === 1 ? "great condition" : "local pickup"}`,
+      title: `${intent.item} — ${sourceQualifier} ${number === 1 ? "option" : "great condition"}`,
       price: intent.maxPrice === undefined ? candidatePrice : Math.min(candidatePrice, intent.maxPrice),
       currency: intent.currency ?? "CAD",
       imageUrl: `https://images.example.com/${source.id}-${number}.jpg`,
@@ -57,4 +59,3 @@ function createMockListings(source: MarketplaceSource, intent: SearchIntent): Li
     };
   });
 }
-

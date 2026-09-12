@@ -38,6 +38,11 @@ describe("server", () => {
     const job = jobs.get(jobId);
     await job?.done;
     expect(job?.events.at(-1)).toEqual({ type: "job_complete", jobId });
+
+    const snapshot = await testApp.inject({ method: "GET", url: `/search/${jobId}` });
+    expect(snapshot.statusCode).toBe(200);
+    expect(snapshot.json()).toMatchObject({ jobId, status: "complete" });
+    expect(snapshot.json().listings).toHaveLength(2);
     await testApp.close();
   });
 

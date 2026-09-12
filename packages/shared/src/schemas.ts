@@ -45,7 +45,8 @@ export const listingSchema = z.object({
   postedAt: z.string().datetime().optional(),
   description: z.string().min(1).optional(),
   extractedAt: z.string().datetime(),
-  confidence: z.number().min(0).max(1).optional()
+  confidence: z.number().min(0).max(1).optional(),
+  rankScore: z.number().min(0).max(100).optional()
 });
 
 export const searchEventSchema = z.discriminatedUnion("type", [
