@@ -14,12 +14,12 @@ or checkpoint answers.
    any MFA or checkpoint directly in the browser.
 5. The agent detects the authenticated session using only the presence of the
    `c_user` and `xs` cookie names, saves Steel's opaque profile ID to
-   `data/facebook-marketplace-profile.json`, and resumes the Marketplace
+   `data/steel-profiles.json`, and resumes the Marketplace
    search automatically.
 
 The profile file is ignored by Git. It contains an opaque Steel profile ID—not
-Facebook credentials or cookie values. To provide a managed profile instead,
-set `STEEL_FACEBOOK_PROFILE_ID`; this takes precedence over the local file.
+Facebook credentials or cookie values. Set `STEEL_PROFILE_STORE_PATH` to use a
+different secure server-side location.
 
 ## Session settings
 

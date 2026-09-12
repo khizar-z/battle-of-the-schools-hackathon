@@ -2,15 +2,18 @@ import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Listing, MarketplaceSource } from "@gehackathon/shared";
 import { searchApi } from "../lib/api";
 import { initialSearchState, searchReducer, type SourceProgress } from "../lib/search-state";
+import { loadSearchSession, openSearchWorkspace, saveSearchSession } from "../lib/search-session";
 import { defaultSources } from "../lib/sources";
 
 const phaseLabel: Record<SourceProgress["phase"], string> = {
   idle: "Queued",
   searching: "Searching…",
   extracting: "Extracting…",
+  ranking: "AI is evaluating matches…",
   complete: "Complete",
   error: "Couldn’t search",
   needs_login: "Sign-in needed",
+  skipped: "Not searched",
 };
 
 function formatPrice(listing: Listing): string {
@@ -45,11 +48,26 @@ function ActivityPanel({ sources, selectedIds, progress }: { sources: Marketplac
               <span>{item.message ?? phaseLabel[item.phase]}</span>
             </div>
             {item.phase === "complete" ? <span className="count-pill">{item.count}</span> : null}
-            {item.liveSessionUrl ? <a className="watch-link" href={item.liveSessionUrl} target="_blank" rel="noreferrer">Watch live ↗</a> : null}
+            {item.liveSessionUrl ? <a className="watch-link" href={item.liveSessionUrl} target="_blank" rel="noreferrer">{item.phase === "needs_login" ? "Sign in ↗" : "Watch live ↗"}</a> : null}
           </div>
         );
       })}
     </section>
+  );
+}
+
+function SignInPrompt({ sources, progress }: { sources: MarketplaceSource[]; progress: Record<string, SourceProgress> }) {
+  const source = sources.find((item) => progress[item.id]?.phase === "needs_login");
+  if (!source) return null;
+  const item = progress[source.id];
+  return (
+    <aside className="sign-in-prompt" role="alert">
+      <div>
+        <strong>Sign in to {source.name} to continue</strong>
+        <p>{item.message ?? "Complete sign-in in the live Steel session. Scout will continue automatically."}</p>
+      </div>
+      {item.liveSessionUrl ? <a href={item.liveSessionUrl} target="_blank" rel="noreferrer">Open sign-in ↗</a> : null}
+    </aside>
   );
 }
 
@@ -76,19 +94,50 @@ export function App() {
   const [sort, setSort] = useState<"relevance" | "price">("relevance");
   const [marketplaceFilter, setMarketplaceFilter] = useState("all");
   const [maxPrice, setMaxPrice] = useState("");
+  const [storageReady, setStorageReady] = useState(false);
   const cancelSubscription = useRef<(() => void) | null>(null);
+  const restoredSourceIds = useRef<string[] | undefined>(undefined);
+  const isWorkspace = new URLSearchParams(window.location.search).get("view") === "workspace";
 
   useEffect(() => {
+    let live = true;
+    void loadSearchSession().then((savedState) => {
+      if (!live) return;
+      if (savedState) {
+        restoredSourceIds.current = savedState.selectedSourceIds;
+        dispatch({ type: "restore", state: savedState });
+      }
+      setStorageReady(true);
+    });
+    return () => { live = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady) return;
     let live = true;
     searchApi.getSources().then((loadedSources) => {
       if (!live) return;
       setSources(loadedSources);
-      dispatch({ type: "set_sources", sourceIds: loadedSources.filter((source) => source.enabled).map((source) => source.id) });
+      const restoredIds = restoredSourceIds.current?.filter((id) => loadedSources.some((source) => source.id === id));
+      dispatch({ type: "set_sources", sourceIds: restoredIds?.length ? restoredIds : loadedSources.filter((source) => source.enabled).map((source) => source.id) });
     }).catch((error: unknown) => {
       if (live) dispatch({ type: "error", message: error instanceof Error ? error.message : "Could not load marketplaces." });
     });
     return () => { live = false; cancelSubscription.current?.(); };
-  }, []);
+  }, [storageReady]);
+
+  useEffect(() => {
+    if (storageReady) void saveSearchSession(state);
+  }, [state, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady || !state.jobId || state.status !== "running") return;
+    let live = true;
+    void searchApi.getSearchJob(state.jobId).then((snapshot) => {
+      if (live && snapshot.status === "complete") dispatch({ type: "restore_snapshot", snapshot });
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [state.jobId, state.status, storageReady]);
 
   const handleSearch = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -133,7 +182,7 @@ export function App() {
 
   const hasSearch = state.status !== "idle" || state.listings.length > 0;
   return (
-    <main className="app-shell">
+    <main className={`app-shell${isWorkspace ? " workspace" : ""}`}>
       <header className="app-header">
         <div className="brand-mark" aria-hidden="true">S</div>
         <div><p className="eyebrow">UNIVERSAL SECONDHAND SEARCH</p><h1>Scout</h1></div>
@@ -157,14 +206,18 @@ export function App() {
 
       {state.error && <div className="error-banner" role="alert">{state.error}</div>}
       {hasSearch && <ActivityPanel sources={sources} selectedIds={state.selectedSourceIds} progress={state.sourceProgress} />}
+      {hasSearch && <SignInPrompt sources={sources} progress={state.sourceProgress} />}
 
       <section className="results-section" aria-live="polite">
         <div className="results-heading">
           <div><h2>Results {state.listings.length ? `(${state.listings.length})` : ""}</h2><p>{state.status === "running" ? "New finds appear as agents finish." : state.status === "complete" ? "Search complete." : "Your best local finds will appear here."}</p></div>
-          {hasSearch && <div className="controls">
-            <select value={sort} onChange={(event) => setSort(event.target.value as "relevance" | "price")} aria-label="Sort results"><option value="relevance">Relevance</option><option value="price">Lowest price</option></select>
-            <select value={marketplaceFilter} onChange={(event) => setMarketplaceFilter(event.target.value)} aria-label="Filter by marketplace"><option value="all">All sources</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
-            <input value={maxPrice} onChange={(event) => setMaxPrice(event.target.value.replace(/[^0-9]/g, ""))} inputMode="numeric" placeholder="Max $" aria-label="Maximum price" />
+          {hasSearch && <div className="results-actions">
+            {!isWorkspace && <button type="button" className="text-button workspace-button" onClick={() => { void saveSearchSession(state); openSearchWorkspace(); }}>Keep results open ↗</button>}
+            <div className="controls">
+              <select value={sort} onChange={(event) => setSort(event.target.value as "relevance" | "price")} aria-label="Sort results"><option value="relevance">Relevance</option><option value="price">Lowest price</option></select>
+              <select value={marketplaceFilter} onChange={(event) => setMarketplaceFilter(event.target.value)} aria-label="Filter by marketplace"><option value="all">All sources</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
+              <input value={maxPrice} onChange={(event) => setMaxPrice(event.target.value.replace(/[^0-9]/g, ""))} inputMode="numeric" placeholder="Max $" aria-label="Maximum price" />
+            </div>
           </div>}
         </div>
         {!hasSearch ? <div className="empty-state"><span aria-hidden="true">⌕</span><h3>One search. Every good find.</h3><p>Pick your marketplaces and Scout’s agents will compare listings for you.</p></div> : visibleListings.length ? <div className="listing-grid">{visibleListings.map((listing) => <ListingCard key={listing.id} listing={listing} />)}</div> : <div className="empty-state compact"><span className="loader" aria-hidden="true" /><p>{state.status === "running" ? "Agents are checking listings…" : "No listings match those filters."}</p></div>}

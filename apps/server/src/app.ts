@@ -3,7 +3,7 @@ import Fastify from "fastify";
 
 import { DEFAULT_SOURCES, createSearchRequestSchema } from "@gehackathon/shared";
 
-import { createQueryParser, type QueryParser } from "./query-parser-service.js";
+import { createQueryParser, getConfiguredLlmProvider, type QueryParser } from "./query-parser-service.js";
 import { SearchJobManager } from "./search-jobs.js";
 
 export interface BuildAppOptions {
@@ -19,6 +19,7 @@ export function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({ logger: true });
   const jobs = options.jobs ?? new SearchJobManager();
   const queryParser = options.queryParser ?? createQueryParser();
+  const llmProvider = getConfiguredLlmProvider();
 
   void app.register(cors, { origin: true });
 
@@ -27,7 +28,8 @@ export function buildApp(options: BuildAppOptions = {}) {
     service: "gehackathon-server",
     mode: process.env.MOCK_AGENTS === "false" ? "live" : "mock",
     steelConfigured: Boolean(process.env.STEEL_API_KEY),
-    llmConfigured: Boolean(process.env.OPENAI_API_KEY)
+    llmConfigured: llmProvider !== "fallback",
+    llmProvider
   }));
 
   // This gives the extension a stable development contract before agent work begins.

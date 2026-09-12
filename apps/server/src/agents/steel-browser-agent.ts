@@ -3,20 +3,22 @@ import { chromium, type BrowserContext, type Page } from "playwright-core";
 import Steel from "steel-sdk";
 
 import { BrowserAgentError, type AgentSearchContext, type BrowserAgent } from "./browser-agent.js";
-import { FacebookProfileStore } from "./facebook-profile-store.js";
+import type { SteelProfileStore } from "./profile-store.js";
 import type { RecipeStore, SiteRecipe } from "../recipes/recipe-store.js";
+import { marketplaceSearchTerms } from "../search-policy.js";
 
-const SESSION_TIMEOUT_MS = 120_000;
+const SESSION_TIMEOUT_MS = 420_000;
 const PAGE_TIMEOUT_MS = 30_000;
 const FACEBOOK_MARKETPLACE_URL = "https://www.facebook.com/marketplace/";
 const FACEBOOK_LOGIN_POLL_MS = 3_000;
+const LOGIN_WAIT_MS = 300_000;
 
 interface SteelBrowserAgentOptions {
   apiKey: string;
   sessionTimeoutMs?: number;
   facebookLoginTimeoutMs?: number;
   recipeStore: RecipeStore;
-  facebookProfileStore?: FacebookProfileStore;
+  profileStore: SteelProfileStore;
 }
 
 interface ExtractedEbayListing {
@@ -49,14 +51,14 @@ export class SteelBrowserAgent implements BrowserAgent {
   private readonly sessionTimeoutMs: number;
   private readonly facebookLoginTimeoutMs: number;
   private readonly recipeStore: RecipeStore;
-  private readonly facebookProfileStore: FacebookProfileStore;
+  private readonly profileStore: SteelProfileStore;
 
   constructor(options: SteelBrowserAgentOptions) {
     this.apiKey = options.apiKey;
     this.sessionTimeoutMs = options.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
     this.facebookLoginTimeoutMs = options.facebookLoginTimeoutMs ?? positiveIntegerFromEnvironment("FACEBOOK_LOGIN_TIMEOUT_MS", 900_000);
     this.recipeStore = options.recipeStore;
-    this.facebookProfileStore = options.facebookProfileStore ?? new FacebookProfileStore();
+    this.profileStore = options.profileStore;
     this.client = new Steel({ steelAPIKey: this.apiKey });
   }
 
@@ -67,15 +69,15 @@ export class SteelBrowserAgent implements BrowserAgent {
     try {
       throwIfAborted(context.signal);
       const isFacebook = source.id === "facebook";
-      const savedFacebookProfileId = isFacebook ? await this.facebookProfileStore.load() : undefined;
+      const profileId = await this.profileStore.get(source.id);
       const session = await this.client.sessions.create({
-        ...(savedFacebookProfileId ? { profileId: savedFacebookProfileId } : {}),
-        // A profile must be persistent for user-completed Facebook login to be
-        // available to the next marketplace search.
-        ...(isFacebook ? { persistProfile: true, debugConfig: { interactive: true } } : {}),
-        timeout: isFacebook ? Math.max(this.sessionTimeoutMs, this.facebookLoginTimeoutMs) : this.sessionTimeoutMs
+        timeout: isFacebook ? Math.max(this.sessionTimeoutMs, this.facebookLoginTimeoutMs) : this.sessionTimeoutMs,
+        persistProfile: true,
+        ...(profileId ? { profileId } : {}),
+        debugConfig: { interactive: true }
       });
       sessionId = session.id;
+      if (session.profileId) await this.profileStore.save(source.id, session.profileId);
       if (isFacebook && !session.profileId) {
         throw new BrowserAgentError("Steel did not return a persistent profile ID for the Facebook login session.");
       }
@@ -85,7 +87,7 @@ export class SteelBrowserAgent implements BrowserAgent {
 
       const browserContext = browser.contexts()[0];
       if (!browserContext) throw new BrowserAgentError("Steel session did not expose a browser context.");
-      const page = browserContext.pages()[0] ?? (await browserContext.newPage());
+      let page = browserContext.pages()[0] ?? (await browserContext.newPage());
 
       const recipe = await this.recipeStore.get(source.domain);
       const isEbay = source.id === "ebay";
@@ -100,7 +102,7 @@ export class SteelBrowserAgent implements BrowserAgent {
           timeoutMs: this.facebookLoginTimeoutMs,
           signal: context.signal,
           reportStatus: context.reportStatus,
-          saveProfile: (profileId) => this.facebookProfileStore.save(profileId)
+          saveProfile: (savedProfileId) => this.profileStore.save(source.id, savedProfileId)
         });
       }
 
@@ -116,6 +118,21 @@ export class SteelBrowserAgent implements BrowserAgent {
         timeout: PAGE_TIMEOUT_MS
       });
       throwIfAborted(context.signal);
+      if (await pageRequiresLogin(page)) {
+        context.reportStatus(
+          "needs_login",
+          `${source.name} needs sign-in. Complete it in the live Steel session to continue this search.`,
+          session.sessionViewerUrl || session.debugUrl
+        );
+        const authenticatedPage = await waitForSignIn(browserContext, source, context.signal);
+        if (!authenticatedPage) {
+          throw new BrowserAgentError(`${source.name} sign-in was not completed before the session expired.`);
+        }
+        page = authenticatedPage;
+        context.reportStatus("searching", "Sign-in confirmed. Continuing marketplace search…", session.sessionViewerUrl || session.debugUrl);
+        await page.goto(destination, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+        throwIfAborted(context.signal);
+      }
       context.reportStatus("extracting", `Reading ${source.name} listing cards…`, session.sessionViewerUrl || session.debugUrl);
 
       if (isFacebook) {
@@ -135,9 +152,7 @@ export class SteelBrowserAgent implements BrowserAgent {
       if (isKijiji) {
         await page.waitForSelector(recipe?.resultSelector ?? '[data-testid="listing-link"]', { timeout: PAGE_TIMEOUT_MS });
         const extracted = await extractKijijiListings(page);
-        const listings = extracted
-          .map((listing, index) => normalizeKijijiListing(listing, source, index))
-          .filter((listing) => isWithinPriceRange(listing, intent));
+        const listings = extracted.map((listing, index) => normalizeKijijiListing(listing, source, index));
         await this.recipeStore.save(defaultRecipe(source));
         return listings;
       }
@@ -179,18 +194,24 @@ async function discoverGenericSearch(page: Page, source: MarketplaceSource, inte
   if (!(await searchInput.isVisible().catch(() => false))) {
     throw new BrowserAgentError(`${source.name} does not expose a discoverable search box.`);
   }
-  await searchInput.fill(intent.item);
+  await searchInput.fill(marketplaceSearchTerms(intent));
   await searchInput.press("Enter");
   await page.waitForLoadState("domcontentloaded", { timeout: PAGE_TIMEOUT_MS }).catch(() => undefined);
 
-  const resultSelector = 'article a[href], [data-testid*="listing"] a[href], li a[href]';
+  const resultSelector = 'a[href*="/marketplace/item/"], article a[href], [data-testid*="listing"] a[href], li a[href]';
   const links = await page.locator(resultSelector).evaluateAll((elements: Element[]) =>
-    elements.slice(0, 24).flatMap((element) => {
+    elements.flatMap((element) => {
       const anchor = element as HTMLAnchorElement;
       const title = anchor.textContent?.trim();
       if (!title || !anchor.href || title.length < 3) return [];
-      return [{ title, url: anchor.href }];
-    })
+      const pathname = new URL(anchor.href).pathname;
+      const isMarketplaceItem = /\/marketplace\/item\//i.test(pathname);
+      const isCardLink = Boolean(anchor.closest("article, li, [role='article'], [data-testid*='listing']"));
+      if (!isMarketplaceItem && !isCardLink) return [];
+      const card = anchor.closest("article, li, [role='article'], [data-testid*='listing']") ?? anchor.parentElement;
+      const description = card?.textContent?.trim().replace(/\s+/g, " ");
+      return [{ title, url: anchor.href, description: description?.slice(0, 700) }];
+    }).slice(0, 24)
   );
   if (!links.length) throw new BrowserAgentError(`${source.name} search completed but no listing links were discovered.`);
 
@@ -202,6 +223,7 @@ async function discoverGenericSearch(page: Page, source: MarketplaceSource, inte
       sourceName: source.name,
       title: link.title,
       url: link.url,
+      ...(link.description ? { description: link.description } : {}),
       extractedAt,
       confidence: 0.45
     })),
@@ -220,16 +242,12 @@ async function discoverGenericSearch(page: Page, source: MarketplaceSource, inte
 
 export function createEbaySearchUrl(intent: SearchIntent): string {
   const url = new URL("https://www.ebay.ca/sch/i.html");
-  url.searchParams.set("_nkw", intent.item);
-  if (intent.maxPrice !== undefined) url.searchParams.set("_udhi", String(intent.maxPrice));
-  if (intent.minPrice !== undefined) url.searchParams.set("_udlo", String(intent.minPrice));
-  if (intent.condition === "used") url.searchParams.set("LH_ItemCondition", "3000");
-  if (intent.condition === "new") url.searchParams.set("LH_ItemCondition", "1000");
+  url.searchParams.set("_nkw", marketplaceSearchTerms(intent));
   return url.toString();
 }
 
 export function createKijijiSearchUrl(intent: SearchIntent): string {
-  const listingSlug = intent.item
+  const listingSlug = marketplaceSearchTerms(intent)
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
@@ -239,7 +257,7 @@ export function createKijijiSearchUrl(intent: SearchIntent): string {
 
 export function createFacebookSearchUrl(intent: SearchIntent): string {
   const url = new URL("https://www.facebook.com/marketplace/search/");
-  url.searchParams.set("query", intent.item);
+  url.searchParams.set("query", marketplaceSearchTerms(intent));
   return url.toString();
 }
 
@@ -336,6 +354,55 @@ async function extractFacebookListings(page: Page): Promise<ExtractedFacebookLis
       }];
     });
   });
+}
+
+async function pageRequiresLogin(page: Page): Promise<boolean> {
+  const urlLooksLikeLogin = /(?:login|log-in|signin|sign-in|checkpoint)/i.test(page.url());
+  if (urlLooksLikeLogin) return true;
+  return page.locator('input[type="password"], input[name="email"], input[name="username"]').first().isVisible().catch(() => false);
+}
+
+async function waitForSignIn(browserContext: BrowserContext, source: MarketplaceSource, signal: AbortSignal): Promise<Page | undefined> {
+  const deadline = Date.now() + LOGIN_WAIT_MS;
+  let stableCandidate: { page: Page; url: string; seenAt: number } | undefined;
+  while (Date.now() < deadline) {
+    throwIfAborted(signal);
+    const pages = browserContext.pages().filter((page) => !page.isClosed() && sourceUrlMatches(page.url(), source));
+    const authenticated = await hasAuthenticatedSession(browserContext, source);
+    for (const page of pages) {
+      if (await pageRequiresLogin(page)) continue;
+
+      // Facebook's login flow briefly changes its URL before it has completed.
+      // For Facebook we require its authenticated session cookie; for other
+      // marketplaces, require a non-login page to remain stable for two polls.
+      if (authenticated) return page;
+      if (stableCandidate?.page === page && stableCandidate.url === page.url() && Date.now() - stableCandidate.seenAt >= 2_000) {
+        return page;
+      }
+      stableCandidate = { page, url: page.url(), seenAt: Date.now() };
+    }
+    await delay(1_000);
+  }
+  return undefined;
+}
+
+async function hasAuthenticatedSession(browserContext: BrowserContext, source: MarketplaceSource): Promise<boolean> {
+  if (source.id !== "facebook") return false;
+  return hasFacebookLogin(browserContext);
+}
+
+function sourceUrlMatches(url: string, source: MarketplaceSource): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    const domain = source.domain.replace(/^https?:\/\//, "").split("/")[0].toLowerCase();
+    return hostname === domain || hostname.endsWith(`.${domain}`);
+  } catch {
+    return false;
+  }
+}
+
+function delay(durationMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, durationMs));
 }
 
 async function extractEbayListings(page: Page): Promise<ExtractedEbayListing[]> {

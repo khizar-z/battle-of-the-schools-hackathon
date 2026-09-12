@@ -1,5 +1,7 @@
 import type { Listing, SearchIntent } from "@gehackathon/shared";
 
+import { relevanceTermsForIntent } from "../search-policy.js";
+
 const TRACKING_PARAMETERS = new Set(["fbclid", "gclid", "mc_cid", "mc_eid"]);
 
 export function normalizeListing(listing: Listing): Listing {
@@ -34,13 +36,22 @@ export function dedupeListings(incoming: Listing[], existing: Listing[]): Listin
 
 export function rankListings(listings: Listing[], intent: SearchIntent): Listing[] {
   return listings
-    .map((listing) => ({ ...listing, rankScore: scoreListing(listing, intent) }))
+    .map((listing) => {
+      const deterministicScore = scoreListing(listing, intent);
+      // When a real model has evaluated a listing, semantic judgement is the
+      // primary signal; price, location, freshness, and completeness only
+      // settle close calls. The fallback remains fully deterministic.
+      const rankScore = listing.relevanceScore === undefined
+        ? deterministicScore
+        : Math.round((listing.relevanceScore * 0.8 + deterministicScore * 0.2) * 100) / 100;
+      return { ...listing, rankScore };
+    })
     .sort((left, right) => (right.rankScore ?? 0) - (left.rankScore ?? 0));
 }
 
 export function scoreListing(listing: Listing, intent: SearchIntent): number {
   const text = `${listing.title} ${listing.description ?? ""}`;
-  const targetTerms = tokens([intent.item, ...(intent.keywords ?? [])].join(" "));
+  const targetTerms = tokens(relevanceTermsForIntent(intent));
   const textTerms = new Set(tokens(text));
   const matchingTerms = targetTerms.filter((term) => textTerms.has(term)).length;
   const relevance = targetTerms.length ? (matchingTerms / targetTerms.length) * 50 : 0;
@@ -105,4 +116,3 @@ function jaccardSimilarity(left: string[], right: string[]): number {
   const union = new Set([...leftTerms, ...rightTerms]).size;
   return union ? intersection / union : 0;
 }
-

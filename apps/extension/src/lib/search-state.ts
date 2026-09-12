@@ -1,7 +1,7 @@
-import type { Listing, MarketplaceSource, SearchEvent } from "@gehackathon/shared";
+import type { Listing, MarketplaceSource, SearchEvent, SearchJobSnapshot } from "@gehackathon/shared";
 
 export type SearchStatus = "idle" | "running" | "complete" | "error";
-export type SourcePhase = "idle" | "searching" | "extracting" | "complete" | "error" | "needs_login";
+export type SourcePhase = "idle" | "searching" | "extracting" | "ranking" | "complete" | "error" | "needs_login" | "skipped";
 
 export interface SourceProgress {
   phase: SourcePhase;
@@ -32,6 +32,8 @@ export type SearchAction =
   | { type: "set_query"; query: string }
   | { type: "set_sources"; sourceIds: string[] }
   | { type: "toggle_source"; sourceId: string }
+  | { type: "restore"; state: SearchState }
+  | { type: "restore_snapshot"; snapshot: SearchJobSnapshot }
   | { type: "start"; jobId: string; sourceIds: string[] }
   | { type: "replace_listings"; listings: Listing[] }
   | { type: "event"; event: SearchEvent }
@@ -61,6 +63,16 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
         selectedSourceIds: state.selectedSourceIds.includes(action.sourceId)
           ? state.selectedSourceIds.filter((id) => id !== action.sourceId)
           : [...state.selectedSourceIds, action.sourceId],
+      };
+    case "restore":
+      return action.state;
+    case "restore_snapshot":
+      return {
+        ...state,
+        jobId: action.snapshot.jobId,
+        query: state.query || action.snapshot.intent.rawQuery,
+        status: action.snapshot.status,
+        listings: action.snapshot.listings,
       };
     case "start":
       return {
@@ -97,7 +109,13 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
           { phase: "extracting", count: current.count + newListings.length, message: "Reading listing details…" },
         );
       }
-      if (event.type === "source_complete") return withProgress(state, event.sourceId, { phase: "complete", count: event.count, message: "Search complete" });
+      if (event.type === "source_complete") {
+        const current = state.sourceProgress[event.sourceId];
+        if (current?.phase === "needs_login" || current?.phase === "skipped") {
+          return withProgress(state, event.sourceId, { count: event.count });
+        }
+        return withProgress(state, event.sourceId, { phase: "complete", count: event.count, message: "Search complete" });
+      }
       if (event.type === "job_complete") return { ...state, status: "complete" };
       return state;
     }

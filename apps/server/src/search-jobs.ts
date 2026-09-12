@@ -2,6 +2,7 @@ import type { Listing, MarketplaceSource, SearchEvent, SearchIntent } from "@geh
 
 import type { BrowserAgent } from "./agents/browser-agent.js";
 import { createBrowserAgent } from "./agents/create-browser-agent.js";
+import { createListingRanker, type ListingRanker } from "./listing-relevance-service.js";
 import { dedupeListings, rankListings } from "./ranking/listings.js";
 
 export type SearchJobStatus = "running" | "complete";
@@ -28,6 +29,7 @@ export interface SearchJobManagerOptions {
   sourceTimeoutMs?: number;
   facebookLoginTimeoutMs?: number;
   sourceRetryCount?: number;
+  ranker?: ListingRanker;
 }
 
 export class SearchJobManager {
@@ -37,12 +39,16 @@ export class SearchJobManager {
   private readonly sourceTimeoutMs: number;
   private readonly facebookLoginTimeoutMs: number;
   private readonly sourceRetryCount: number;
+  private readonly ranker: ListingRanker;
 
   constructor(options: SearchJobManagerOptions = {}) {
     this.agent = options.agent ?? createBrowserAgent(options);
-    this.sourceTimeoutMs = options.sourceTimeoutMs ?? 90_000;
+    // Manual marketplace sign-in is interactive, so allow enough time for it
+    // to complete and for the authenticated browser to resume the search.
+    this.sourceTimeoutMs = options.sourceTimeoutMs ?? 360_000;
     this.facebookLoginTimeoutMs = options.facebookLoginTimeoutMs ?? positiveIntegerFromEnvironment("FACEBOOK_LOGIN_TIMEOUT_MS", 900_000);
     this.sourceRetryCount = options.sourceRetryCount ?? 1;
+    this.ranker = options.ranker ?? createListingRanker();
   }
 
   start(intent: SearchIntent, sources: MarketplaceSource[]): SearchJob {
@@ -100,14 +106,21 @@ export class SearchJobManager {
     const timeout = setTimeout(() => {
       controller.abort(timeoutError);
       rejectTimeout(timeoutError);
-    }, this.sourceTimeoutMs);
+    }, timeoutMs);
     let listings: Listing[] = [];
 
     try {
       const rawListings = await this.searchWithRetry(job, source, sourceIndex, controller, timeoutPromise);
-      listings = rankListings(dedupeListings(rawListings, job.listings), job.intent);
+      const candidates = dedupeListings(rawListings, job.listings);
+      this.emit(job, {
+        type: "source_status",
+        sourceId: source.id,
+        status: "ranking",
+        message: `Evaluating ${candidates.length} candidate listings for relevance…`
+      });
+      listings = rankListings(await this.ranker.rank(job.intent, candidates), job.intent);
       job.listings = rankListings([...job.listings, ...listings], job.intent);
-      this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
+      if (listings.length) this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
     } catch (error) {
       this.emit(job, {
         type: "source_status",

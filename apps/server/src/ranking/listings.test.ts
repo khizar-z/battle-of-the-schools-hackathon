@@ -60,4 +60,17 @@ describe("listing aggregation", () => {
     expect(ranked[0]).toMatchObject({ title: "Used ThinkPad T480 laptop" });
     expect(ranked[0].rankScore).toBeGreaterThan(ranked[1].rankScore ?? 0);
   });
+
+  it("gives model relevance more weight than literal keyword overlap", () => {
+    const intent = { rawQuery: "housing near uoft", item: "housing", searchMode: "housing" as const };
+    const ranked = rankListings(
+      [
+        listing({ title: "Transmission housing for Toyota", relevanceScore: 5, url: "https://example.com/part" }),
+        listing({ title: "One-bedroom apartment near UofT", relevanceScore: 96, url: "https://example.com/apartment" })
+      ],
+      intent
+    );
+
+    expect(ranked[0]).toMatchObject({ title: "One-bedroom apartment near UofT", relevanceScore: 96 });
+  });
 });

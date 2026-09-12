@@ -41,12 +41,17 @@ function createMockListings(source: MarketplaceSource, intent: SearchIntent): Li
 
   return [1, 2].map((number) => {
     const candidatePrice = price + (number - 1) * 5;
+    const title = intent.searchMode === "housing"
+      ? number === 1
+        ? `One-bedroom apartment rental near ${location}`
+        : `Room for rent near ${location}`
+      : `${intent.item} — ${sourceQualifier} ${number === 1 ? "option" : "great condition"}`;
 
     return {
       id: `${source.id}-mock-${number}`,
       sourceId: source.id,
       sourceName: source.name,
-      title: `${intent.item} — ${sourceQualifier} ${number === 1 ? "option" : "great condition"}`,
+      title,
       price: intent.maxPrice === undefined ? candidatePrice : Math.min(candidatePrice, intent.maxPrice),
       currency: intent.currency ?? "CAD",
       imageUrl: `https://images.example.com/${source.id}-${number}.jpg`,

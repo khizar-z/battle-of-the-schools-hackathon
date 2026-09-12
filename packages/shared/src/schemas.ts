@@ -4,6 +4,7 @@ export const searchIntentSchema = z.object({
   rawQuery: z.string().min(1),
   item: z.string().min(1),
   category: z.string().min(1).optional(),
+  searchMode: z.enum(["housing"]).optional(),
   maxPrice: z.number().nonnegative().optional(),
   minPrice: z.number().nonnegative().optional(),
   currency: z.string().length(3).optional(),
@@ -46,6 +47,7 @@ export const listingSchema = z.object({
   description: z.string().min(1).optional(),
   extractedAt: z.string().datetime(),
   confidence: z.number().min(0).max(1).optional(),
+  relevanceScore: z.number().min(0).max(100).optional(),
   rankScore: z.number().min(0).max(100).optional()
 });
 
@@ -59,7 +61,7 @@ export const searchEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("source_status"),
     sourceId: z.string().min(1),
-    status: z.enum(["searching", "extracting", "complete", "error", "needs_login"]),
+    status: z.enum(["searching", "extracting", "ranking", "complete", "error", "needs_login", "skipped"]),
     message: z.string().min(1).optional(),
     liveSessionUrl: z.string().url().optional()
   }),
