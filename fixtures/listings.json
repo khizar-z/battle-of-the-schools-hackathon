@@ -1,0 +1,16 @@
+[
+  {
+    "id": "kijiji-123",
+    "sourceId": "kijiji",
+    "sourceName": "Kijiji",
+    "title": "Used commuter bicycle",
+    "price": 125,
+    "currency": "CAD",
+    "url": "https://www.kijiji.ca/v-bikes/toronto/example/123",
+    "location": "Toronto, ON",
+    "condition": "used",
+    "extractedAt": "2026-09-12T12:00:00.000Z",
+    "confidence": 0.95
+  }
+]
+

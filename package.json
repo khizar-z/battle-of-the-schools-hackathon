@@ -1,14 +1,18 @@
 {
   "name": "gehackathon",
-  "private": true,
   "version": "0.1.0",
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ],
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
   "scripts": {
-    "build": "npm run build --workspace=@gehackathon/extension",
-    "test": "npm run test --workspace=@gehackathon/extension",
-    "typecheck": "npm run typecheck --workspace=@gehackathon/extension"
+    "dev:server": "pnpm --filter @gehackathon/server dev",
+    "dev:extension": "pnpm --filter @gehackathon/extension dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   }
 }

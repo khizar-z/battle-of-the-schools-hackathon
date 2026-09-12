@@ -1,22 +1,21 @@
 {
-  "name": "@gehackathon/shared",
+  "name": "@gehackathon/server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "files": ["dist"],
   "scripts": {
+    "dev": "pnpm --filter @gehackathon/shared build && tsx watch src/main.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "zod": "^3.25.76"
+    "@gehackathon/shared": "workspace:*",
+    "fastify": "^5.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "tsx": "^4.20.5"
   }
 }

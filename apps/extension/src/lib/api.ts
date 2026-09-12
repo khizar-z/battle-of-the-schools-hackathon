@@ -73,7 +73,8 @@ export const searchApi: SearchApi = {
     if (mockMode) return defaultSources;
     const response = await fetch(`${baseUrl}/sources`);
     if (!response.ok) throw new Error("Unable to load marketplaces.");
-    return response.json() as Promise<MarketplaceSource[]>;
+    const payload = await response.json() as MarketplaceSource[] | { sources: MarketplaceSource[] };
+    return Array.isArray(payload) ? payload : payload.sources;
   },
   async startSearch(query, sources) {
     if (mockMode) {
