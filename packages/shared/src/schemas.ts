@@ -59,7 +59,8 @@ export const searchEventSchema = z.discriminatedUnion("type", [
     type: z.literal("source_status"),
     sourceId: z.string().min(1),
     status: z.enum(["searching", "extracting", "complete", "error"]),
-    message: z.string().min(1).optional()
+    message: z.string().min(1).optional(),
+    liveSessionUrl: z.string().url().optional()
   }),
   z.object({
     type: z.literal("listing_batch"),
@@ -78,4 +79,3 @@ export type SearchIntent = z.infer<typeof searchIntentSchema>;
 export type MarketplaceSource = z.infer<typeof marketplaceSourceSchema>;
 export type Listing = z.infer<typeof listingSchema>;
 export type SearchEvent = z.infer<typeof searchEventSchema>;
-
