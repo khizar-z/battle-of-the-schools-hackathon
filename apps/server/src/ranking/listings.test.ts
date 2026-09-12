@@ -73,4 +73,26 @@ describe("listing aggregation", () => {
 
     expect(ranked[0]).toMatchObject({ title: "One-bedroom apartment near UofT", relevanceScore: 96 });
   });
+
+  it("rewards trustworthy seller, product, and image-quality signals", () => {
+    const intent = { rawQuery: "used ThinkPad", item: "ThinkPad" };
+    const ranked = rankListings(
+      [
+        listing({ id: "plain", title: "Used ThinkPad T480", url: "https://example.com/plain" }),
+        listing({
+          id: "well-documented",
+          title: "Used ThinkPad T480",
+          url: "https://example.com/well-documented",
+          sellerRating: 4.8,
+          productRating: 4.7,
+          imageQualityScore: 88,
+          imageQualityConfidence: 0.9
+        })
+      ],
+      intent
+    );
+
+    expect(ranked[0]).toMatchObject({ id: "well-documented" });
+    expect(ranked[0].rankScore).toBeGreaterThan(ranked[1].rankScore ?? 0);
+  });
 });

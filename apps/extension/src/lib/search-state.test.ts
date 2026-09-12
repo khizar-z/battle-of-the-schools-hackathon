@@ -49,7 +49,7 @@ describe("searchReducer", () => {
     expect(next.sourceProgress.ebay).toMatchObject({ phase: "error", message: "Timed out" });
   });
 
-  it("keeps a sign-in-required source visible after its search completes", () => {
+  it("clears a sign-in-required state when the source completes successfully", () => {
     const signInRequired = searchReducer(initialSearchState, {
       type: "event",
       event: { type: "source_status", sourceId: "facebook", status: "needs_login", message: "Sign in first" }
@@ -59,6 +59,23 @@ describe("searchReducer", () => {
       event: { type: "source_complete", sourceId: "facebook", count: 0 }
     });
 
-    expect(completed.sourceProgress.facebook).toMatchObject({ phase: "needs_login", message: "Sign in first", count: 0 });
+    expect(completed.sourceProgress.facebook).toEqual({ phase: "complete", message: "Search complete", count: 0, liveSessionUrl: undefined });
+  });
+
+  it("clears a stale sign-in prompt when a completed job snapshot is restored", () => {
+    const waitingForLogin = {
+      ...initialSearchState,
+      jobId: "job-123",
+      status: "running" as const,
+      sourceProgress: {
+        facebook: { phase: "needs_login" as const, count: 0, message: "Sign in", liveSessionUrl: "https://viewer.example.test" },
+      },
+    };
+    const restored = searchReducer(waitingForLogin, {
+      type: "restore_snapshot",
+      snapshot: { jobId: "job-123", status: "complete", intent: { rawQuery: "chair", item: "chair" }, listings: [] },
+    });
+
+    expect(restored.sourceProgress.facebook).toMatchObject({ phase: "complete", liveSessionUrl: undefined });
   });
 });

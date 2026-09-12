@@ -73,6 +73,14 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
         query: state.query || action.snapshot.intent.rawQuery,
         status: action.snapshot.status,
         listings: action.snapshot.listings,
+        sourceProgress: action.snapshot.status === "complete"
+          ? Object.fromEntries(Object.entries(state.sourceProgress).map(([sourceId, progress]) => [
+              sourceId,
+              progress.phase === "needs_login"
+                ? { ...progress, phase: "complete", message: "Search complete", liveSessionUrl: undefined }
+                : progress,
+            ]))
+          : state.sourceProgress,
       };
     case "start":
       return {
@@ -111,10 +119,15 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
       }
       if (event.type === "source_complete") {
         const current = state.sourceProgress[event.sourceId];
-        if (current?.phase === "needs_login" || current?.phase === "skipped") {
-          return withProgress(state, event.sourceId, { count: event.count });
+        if (current?.phase === "error" || current?.phase === "skipped") {
+          return withProgress(state, event.sourceId, { count: event.count, liveSessionUrl: undefined });
         }
-        return withProgress(state, event.sourceId, { phase: "complete", count: event.count, message: "Search complete" });
+        return withProgress(state, event.sourceId, {
+          phase: "complete",
+          count: event.count,
+          message: "Search complete",
+          liveSessionUrl: undefined,
+        });
       }
       if (event.type === "job_complete") return { ...state, status: "complete" };
       return state;

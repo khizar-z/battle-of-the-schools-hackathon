@@ -5,6 +5,7 @@ import Steel from "steel-sdk";
 import { BrowserAgentError, type AgentSearchContext, type BrowserAgent } from "./browser-agent.js";
 import type { SteelProfileStore } from "./profile-store.js";
 import type { RecipeStore, SiteRecipe } from "../recipes/recipe-store.js";
+import { NoopImageQualityAssessor, type ListingImageQualityAssessor } from "../image-quality-service.js";
 import { marketplaceSearchTerms } from "../search-policy.js";
 
 const SESSION_TIMEOUT_MS = 420_000;
@@ -12,6 +13,7 @@ const PAGE_TIMEOUT_MS = 30_000;
 const FACEBOOK_MARKETPLACE_URL = "https://www.facebook.com/marketplace/";
 const FACEBOOK_LOGIN_POLL_MS = 3_000;
 const LOGIN_WAIT_MS = 300_000;
+const IMAGE_QUALITY_MAX_LISTINGS = boundedIntegerFromEnvironment("IMAGE_QUALITY_MAX_LISTINGS", 4, 1, 12);
 
 interface SteelBrowserAgentOptions {
   apiKey: string;
@@ -19,6 +21,7 @@ interface SteelBrowserAgentOptions {
   facebookLoginTimeoutMs?: number;
   recipeStore: RecipeStore;
   profileStore: SteelProfileStore;
+  imageQualityAssessor?: ListingImageQualityAssessor;
 }
 
 interface ExtractedEbayListing {
@@ -27,6 +30,8 @@ interface ExtractedEbayListing {
   priceText?: string;
   imageUrl?: string;
   condition?: string;
+  sellerRatingText?: string;
+  productRatingText?: string;
 }
 
 interface ExtractedKijijiListing {
@@ -59,6 +64,7 @@ export class SteelBrowserAgent implements BrowserAgent {
   private readonly facebookLoginTimeoutMs: number;
   private readonly recipeStore: RecipeStore;
   private readonly profileStore: SteelProfileStore;
+  private readonly imageQualityAssessor: ListingImageQualityAssessor;
 
   constructor(options: SteelBrowserAgentOptions) {
     this.apiKey = options.apiKey;
@@ -66,6 +72,7 @@ export class SteelBrowserAgent implements BrowserAgent {
     this.facebookLoginTimeoutMs = options.facebookLoginTimeoutMs ?? positiveIntegerFromEnvironment("FACEBOOK_LOGIN_TIMEOUT_MS", 900_000);
     this.recipeStore = options.recipeStore;
     this.profileStore = options.profileStore;
+    this.imageQualityAssessor = options.imageQualityAssessor ?? new NoopImageQualityAssessor();
     this.client = new Steel({ steelAPIKey: this.apiKey });
   }
 
@@ -145,7 +152,7 @@ export class SteelBrowserAgent implements BrowserAgent {
       if (isFacebook) {
         await page.waitForSelector('a[href*="/marketplace/item/"]', { timeout: PAGE_TIMEOUT_MS });
         const extracted = await extractFacebookListings(page);
-        return extracted.map((listing, index) => normalizeFacebookListing(listing, source, intent, index));
+        return this.assessListingImages(page, extracted.map((listing, index) => normalizeFacebookListing(listing, source, intent, index)), context);
       }
 
       if (isEbay) {
@@ -153,20 +160,28 @@ export class SteelBrowserAgent implements BrowserAgent {
         const extracted = await extractEbayListings(page);
         const listings = extracted.map((listing, index) => normalizeEbayListing(listing, source, intent, index));
         await this.recipeStore.save(defaultRecipe(source));
-        return listings;
+        return this.assessListingImages(page, listings, context);
       }
 
       if (isKijiji) {
-        await page.waitForSelector(recipe?.resultSelector ?? '[data-testid="listing-link"]', { timeout: PAGE_TIMEOUT_MS });
+        const resultState = await waitForKijijiResultState(
+          page,
+          recipe?.resultSelector ?? '[data-testid="listing-link"]',
+          context.signal
+        );
+        if (resultState === "empty") {
+          context.reportStatus("extracting", "Kijiji found no listings matching this search.");
+          return [];
+        }
         const extracted = await extractKijijiListings(page);
         const listings = extracted.map((listing, index) => normalizeKijijiListing(listing, source, index));
         await this.recipeStore.save(defaultRecipe(source));
-        return listings;
+        return this.assessListingImages(page, listings, context);
       }
 
       const discovered = await discoverGenericSearch(page, source, intent);
       await this.recipeStore.save(discovered.recipe);
-      return discovered.listings;
+      return this.assessListingImages(page, discovered.listings, context);
     } catch (error) {
       if (error instanceof BrowserAgentError) throw error;
       throw new BrowserAgentError(`Steel browser search failed: ${errorMessage(error)}`);
@@ -174,6 +189,23 @@ export class SteelBrowserAgent implements BrowserAgent {
       await browser?.close().catch(() => undefined);
       if (sessionId) await this.client.sessions.release(sessionId).catch(() => undefined);
     }
+  }
+
+  private async assessListingImages(page: Page, listings: Listing[], context: AgentSearchContext): Promise<Listing[]> {
+    if (!this.imageQualityAssessor.enabled) return listings;
+    const candidates = listings.slice(0, IMAGE_QUALITY_MAX_LISTINGS);
+    if (!candidates.some((listing) => listing.imageUrl)) return listings;
+    context.reportStatus("extracting", "Inspecting listing photos for visible product condition…");
+
+    const assessments = await Promise.all(candidates.map(async (listing) => {
+      if (!listing.imageUrl) return listing;
+      const screenshot = await screenshotListingImage(page, listing.imageUrl);
+      if (!screenshot) return listing;
+      const assessment = await this.imageQualityAssessor.assess(listing, screenshot);
+      return assessment ? { ...listing, ...assessment } : listing;
+    }));
+    const byId = new Map(assessments.map((listing) => [listing.id, listing]));
+    return listings.map((listing) => byId.get(listing.id) ?? listing);
   }
 }
 
@@ -273,6 +305,45 @@ function createSteelCdpUrl(sessionId: string, apiKey: string): string {
   websocketUrl.searchParams.set("apiKey", apiKey);
   websocketUrl.searchParams.set("sessionId", sessionId);
   return websocketUrl.toString();
+}
+
+/**
+ * Kijiji intentionally renders a results page with no listing-card elements
+ * when a query has no matches. Waiting only for cards leaves the browser agent
+ * blocked in the extracting phase until the remote Steel session times out.
+ */
+async function waitForKijijiResultState(
+  page: Page,
+  resultSelector: string,
+  signal: AbortSignal
+): Promise<"results" | "empty"> {
+  const deadline = Date.now() + PAGE_TIMEOUT_MS;
+  const results = page.locator(resultSelector);
+
+  while (Date.now() < deadline) {
+    throwIfAborted(signal);
+
+    if (await results.count() > 0) return "results";
+
+    let pageText: string;
+    try {
+      pageText = await page.locator("body").innerText({ timeout: 3_000 });
+    } catch (error) {
+      // A closed Steel page must finish this source with an error instead of
+      // appearing to keep reading cards after the remote session has ended.
+      throw new BrowserAgentError(`Kijiji page became unavailable while checking search results: ${errorMessage(error)}`);
+    }
+    if (hasKijijiNoResultsText(pageText)) return "empty";
+
+    await waitForAbortableDelay(350, signal);
+  }
+
+  throw new BrowserAgentError("Kijiji did not render listing cards or a no-results message.");
+}
+
+export function hasKijijiNoResultsText(value: string): boolean {
+  const text = value.replace(/\s+/g, " ").toLowerCase();
+  return /\bno results(?:\s+for)?\b|\bcouldn['’]t find (?:any )?(?:results|listings)\b|\bno matches found\b/.test(text);
 }
 
 async function waitForFacebookLogin(options: {
@@ -447,7 +518,10 @@ async function extractEbayListings(page: Page): Promise<ExtractedEbayListing[]> 
         url,
         priceText: card.querySelector(".s-item__price")?.textContent?.trim(),
         imageUrl: (card.querySelector(".s-item__image-img") as HTMLImageElement | null)?.src,
-        condition: card.querySelector(".SECONDARY_INFO")?.textContent?.trim()
+        condition: card.querySelector(".SECONDARY_INFO")?.textContent?.trim(),
+        productRatingText: card.querySelector('[aria-label*="out of 5"], .x-star-rating')?.getAttribute("aria-label")
+          ?? card.querySelector('[aria-label*="out of 5"], .x-star-rating')?.textContent?.trim(),
+        sellerRatingText: card.querySelector(".s-item__seller-info-text, [class*='seller']")?.textContent?.trim()
       }];
     })
   );
@@ -495,9 +569,53 @@ function normalizeEbayListing(
     ...(listing.imageUrl?.startsWith("http") ? { imageUrl: listing.imageUrl } : {}),
     url: canonicalUrl.toString(),
     condition: listing.condition,
+    ...(parseProductRating(listing.productRatingText) === undefined ? {} : { productRating: parseProductRating(listing.productRatingText) }),
+    ...(parseSellerRating(listing.sellerRatingText) === undefined ? {} : { sellerRating: parseSellerRating(listing.sellerRatingText) }),
     extractedAt: new Date().toISOString(),
     confidence: 0.9
   };
+}
+
+export function parseProductRating(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const match = value.match(/(?:^|\s)([0-5](?:\.\d+)?)\s*(?:out of\s*5|\/\s*5|stars?)/i);
+  if (!match) return undefined;
+  const rating = Number.parseFloat(match[1]);
+  return Number.isFinite(rating) ? Math.max(0, Math.min(5, rating)) : undefined;
+}
+
+export function parseSellerRating(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const percentage = value.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*(?:positive|feedback)/i);
+  if (percentage) {
+    const rating = Number.parseFloat(percentage[1]) / 20;
+    return Number.isFinite(rating) ? Math.max(0, Math.min(5, rating)) : undefined;
+  }
+  return parseProductRating(value);
+}
+
+async function screenshotListingImage(page: Page, imageUrl: string): Promise<Buffer | undefined> {
+  const images = page.locator("img");
+  const count = Math.min(await images.count(), 100);
+  for (let index = 0; index < count; index += 1) {
+    const image = images.nth(index);
+    const source = await image.getAttribute("src").catch(() => undefined);
+    if (!source || !sameImageSource(source, imageUrl)) continue;
+    const visible = await image.isVisible().catch(() => false);
+    if (!visible) continue;
+    return image.screenshot({ type: "png", timeout: PAGE_TIMEOUT_MS }).catch(() => undefined);
+  }
+  return undefined;
+}
+
+function sameImageSource(left: string, right: string): boolean {
+  try {
+    const normalizedLeft = new URL(left).toString();
+    const normalizedRight = new URL(right).toString();
+    return normalizedLeft === normalizedRight;
+  } catch {
+    return left === right;
+  }
 }
 
 function normalizeKijijiListing(listing: ExtractedKijijiListing, source: MarketplaceSource, index: number): Listing {
@@ -570,4 +688,11 @@ function positiveIntegerFromEnvironment(name: string, fallback: number): number 
   if (!value) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isSafeInteger(parsed) && parsed >= 60_000 ? parsed : fallback;
+}
+
+function boundedIntegerFromEnvironment(name: string, fallback: number, minimum: number, maximum: number): number {
+  const value = process.env[name];
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
 }

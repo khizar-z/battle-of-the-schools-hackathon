@@ -3,6 +3,7 @@ import { MockBrowserAgent } from "./mock-browser-agent.js";
 import { SteelBrowserAgent } from "./steel-browser-agent.js";
 import { createSteelProfileStore, type SteelProfileStore } from "./profile-store.js";
 import { createRecipeStore, type RecipeStore } from "../recipes/recipe-store.js";
+import { createListingImageQualityAssessor, type ListingImageQualityAssessor } from "../image-quality-service.js";
 
 export interface CreateBrowserAgentOptions {
   mockAgents?: boolean;
@@ -10,6 +11,7 @@ export interface CreateBrowserAgentOptions {
   steelApiKey?: string;
   recipeStore?: RecipeStore;
   profileStore?: SteelProfileStore;
+  imageQualityAssessor?: ListingImageQualityAssessor;
 }
 
 export function createBrowserAgent(options: CreateBrowserAgentOptions = {}): BrowserAgent {
@@ -28,6 +30,7 @@ export function createBrowserAgent(options: CreateBrowserAgentOptions = {}): Bro
   return new SteelBrowserAgent({
     apiKey: steelApiKey,
     recipeStore: options.recipeStore ?? createRecipeStore(),
-    profileStore: options.profileStore ?? createSteelProfileStore()
+    profileStore: options.profileStore ?? createSteelProfileStore(),
+    imageQualityAssessor: options.imageQualityAssessor ?? createListingImageQualityAssessor()
   });
 }

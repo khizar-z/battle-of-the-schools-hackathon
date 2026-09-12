@@ -42,12 +42,17 @@ export const listingSchema = z.object({
   url: z.string().url(),
   location: z.string().min(1).optional(),
   seller: z.string().min(1).optional(),
+  sellerRating: z.number().min(0).max(5).optional(),
+  productRating: z.number().min(0).max(5).optional(),
   condition: z.string().min(1).optional(),
   postedAt: z.string().datetime().optional(),
   description: z.string().min(1).optional(),
   extractedAt: z.string().datetime(),
   confidence: z.number().min(0).max(1).optional(),
   relevanceScore: z.number().min(0).max(100).optional(),
+  imageQualityScore: z.number().min(0).max(100).optional(),
+  imageQualityConfidence: z.number().min(0).max(1).optional(),
+  imageQualityRationale: z.string().min(1).max(1_000).optional(),
   rankScore: z.number().min(0).max(100).optional()
 });
 

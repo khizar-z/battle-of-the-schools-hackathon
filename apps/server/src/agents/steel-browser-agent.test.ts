@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { parseSearchIntent } from "../query-parser.js";
-import { createEbaySearchUrl, createFacebookSearchUrl, createKijijiSearchUrl, extractFacebookPriceText } from "./steel-browser-agent.js";
+import {
+  createEbaySearchUrl,
+  createFacebookSearchUrl,
+  createKijijiSearchUrl,
+  extractFacebookPriceText,
+  hasKijijiNoResultsText,
+  parseProductRating,
+  parseSellerRating
+} from "./steel-browser-agent.js";
 
 describe("marketplace browser recipes", () => {
   it("uses the original request without imposing marketplace filters", () => {
@@ -25,6 +33,12 @@ describe("marketplace browser recipes", () => {
     );
   });
 
+  it("recognizes Kijiji's successful empty-results page", () => {
+    expect(hasKijijiNoResultsText('No results for "a query with no matches"')).toBe(true);
+    expect(hasKijijiNoResultsText("Sorry, we couldn't find any listings matching your search.")).toBe(true);
+    expect(hasKijijiNoResultsText("Showing 123 listings in Toronto")).toBe(false);
+  });
+
   it("builds a Facebook Marketplace search URL after login is available", () => {
     const url = new URL(createFacebookSearchUrl(parseSearchIntent("used road bike")));
 
@@ -36,5 +50,10 @@ describe("marketplace browser recipes", () => {
     expect(extractFacebookPriceText(["1 bedroom apartment near UofT", "$2,400 / month", "Toronto, ON"])).toBe("$2,400");
     expect(extractFacebookPriceText(["2 bedroom condo", "CA$1,850 monthly"])).toBe("CA$1,850");
     expect(extractFacebookPriceText(["3 bedroom apartment", "Toronto, ON"])).toBeUndefined();
+  });
+
+  it("normalizes product stars and seller feedback to five-star ratings", () => {
+    expect(parseProductRating("4.7 out of 5 stars")).toBe(4.7);
+    expect(parseSellerRating("99.2% positive feedback")).toBe(4.96);
   });
 });

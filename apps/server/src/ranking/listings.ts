@@ -54,23 +54,35 @@ export function scoreListing(listing: Listing, intent: SearchIntent): number {
   const targetTerms = tokens(relevanceTermsForIntent(intent));
   const textTerms = new Set(tokens(text));
   const matchingTerms = targetTerms.filter((term) => textTerms.has(term)).length;
-  const relevance = targetTerms.length ? (matchingTerms / targetTerms.length) * 50 : 0;
+  const relevance = targetTerms.length ? (matchingTerms / targetTerms.length) * 45 : 0;
   const exclusions = (intent.exclusions ?? []).some((term) => textTerms.has(normalizeText(term))) ? -40 : 0;
 
   let price = 0;
   if (listing.price !== undefined) {
     if (intent.maxPrice !== undefined) {
-      price = Math.max(0, 20 * (1 - listing.price / Math.max(intent.maxPrice, 1)));
+      price = Math.max(0, 15 * (1 - listing.price / Math.max(intent.maxPrice, 1)));
     } else {
-      price = Math.max(0, 15 - Math.min(listing.price, 150) / 10);
+      price = Math.max(0, 10 - Math.min(listing.price, 150) / 15);
     }
   }
 
-  const recency = scoreRecency(listing.postedAt);
-  const location = scoreLocation(listing.location, intent.location?.raw);
-  const completeness = [listing.imageUrl, listing.description, listing.seller, listing.condition, listing.postedAt].filter(Boolean).length;
+  const recency = Math.round(scoreRecency(listing.postedAt) * (2 / 3));
+  const location = Math.round(scoreLocation(listing.location, intent.location?.raw) * 0.8);
+  const completeness = Math.min(4, [listing.imageUrl, listing.description, listing.seller, listing.condition, listing.postedAt].filter(Boolean).length);
+  const sellerRating = scoreFiveStarRating(listing.sellerRating);
+  const productRating = scoreFiveStarRating(listing.productRating);
+  const imageQuality = scoreImageQuality(listing.imageQualityScore, listing.imageQualityConfidence);
 
-  return Math.max(0, Math.min(100, Math.round((relevance + exclusions + price + recency + location + completeness) * 100) / 100));
+  return Math.max(0, Math.min(100, Math.round((relevance + exclusions + price + recency + location + completeness + sellerRating + productRating + imageQuality) * 100) / 100));
+}
+
+function scoreFiveStarRating(rating: number | undefined): number {
+  return rating === undefined ? 0 : Math.max(0, Math.min(5, rating));
+}
+
+function scoreImageQuality(score: number | undefined, confidence: number | undefined): number {
+  if (score === undefined || confidence === undefined) return 0;
+  return 8 * Math.max(0, Math.min(1, score / 100)) * Math.max(0, Math.min(1, confidence));
 }
 
 function isDuplicate(left: Listing, right: Listing): boolean {

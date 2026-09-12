@@ -38,12 +38,17 @@ export interface Listing {
   url: string;
   location?: string;
   seller?: string;
+  sellerRating?: number;
+  productRating?: number;
   condition?: string;
   postedAt?: string;
   description?: string;
   extractedAt: string;
   confidence?: number;
   relevanceScore?: number;
+  imageQualityScore?: number;
+  imageQualityConfidence?: number;
+  imageQualityRationale?: string;
   rankScore?: number;
 }
 

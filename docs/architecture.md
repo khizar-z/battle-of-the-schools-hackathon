@@ -14,6 +14,6 @@ Extension search form
 
 `BrowserAgent` isolates browser infrastructure from the job orchestrator. `MockBrowserAgent` supports local UI development. With `MOCK_AGENTS=false`, `SteelBrowserAgent` opens a Steel session, publishes its viewer URL, searches eBay or Kijiji through Playwright, then always releases the session.
 
-Recipes are stored in `data/site-recipes.json` at runtime (or `RECIPE_STORE_PATH`). Known eBay and Kijiji recipes are persisted after success. Unknown sources use a constrained search-box discovery fallback and save a lightweight recipe only if listing links are found.
+Recipes are stored in `data/site-recipes.json` at runtime (or `RECIPE_STORE_PATH`). Known eBay and Kijiji recipes are persisted after success. Kijiji's rendered no-results state is handled as a successful empty source and returns zero listings without waiting for listing-card selectors. Unknown sources use a constrained search-box discovery fallback and save a lightweight recipe only if listing links are found.
 
 The rank score is deterministic: query relevance, requested-price fit, recency, requested-location fit, and listing completeness. Exact canonical URLs and high-confidence title/price/location matches are deduplicated.
