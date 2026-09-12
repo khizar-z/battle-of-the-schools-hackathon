@@ -8,9 +8,17 @@
     "default_popup": "popup.html"
   },
   "background": {
+    "scripts": ["background.js"],
     "service_worker": "background.js",
     "type": "module"
   },
   "permissions": ["storage"],
-  "host_permissions": ["http://localhost:3000/*"]
+  "host_permissions": ["http://localhost:3000/*"],
+  "minimum_chrome_version": "121",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "scout@gehackathon.local",
+      "strict_min_version": "121.0"
+    }
+  }
 }
