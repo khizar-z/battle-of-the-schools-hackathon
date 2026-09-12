@@ -1,0 +1,14 @@
+{
+  "name": "gehackathon",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@gehackathon/extension",
+    "test": "npm run test --workspace=@gehackathon/extension",
+    "typecheck": "npm run typecheck --workspace=@gehackathon/extension"
+  }
+}
