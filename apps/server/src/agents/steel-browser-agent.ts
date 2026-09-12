@@ -207,10 +207,21 @@ export class SteelBrowserAgent implements BrowserAgent {
 
     const assessments = await Promise.all(candidates.map(async (listing) => {
       if (!listing.imageUrl) return listing;
-      const screenshot = await screenshotListingImage(page, listing.imageUrl);
-      if (!screenshot) return listing;
-      const assessment = await this.imageQualityAssessor.assess(listing, screenshot);
-      return assessment ? { ...listing, ...assessment } : listing;
+      try {
+        const screenshot = await screenshotListingImage(page, listing.imageUrl);
+        if (!screenshot) return listing;
+        const assessment = await this.imageQualityAssessor.assess(listing, screenshot);
+        return assessment ? { ...listing, ...assessment } : listing;
+      } catch (error) {
+        // Image scoring enriches a listing; it must never prevent the extracted
+        // result from being returned. Steel can close a page while a screenshot
+        // request is in flight, particularly after a Facebook search redirect.
+        console.warn("Skipping optional listing-image assessment", {
+          listingId: listing.id,
+          reason: errorMessage(error)
+        });
+        return listing;
+      }
     }));
     const byId = new Map(assessments.map((listing) => [listing.id, listing]));
     return listings.map((listing) => byId.get(listing.id) ?? listing);
@@ -636,15 +647,22 @@ export function parseSellerRating(value: string | undefined): number | undefined
 }
 
 async function screenshotListingImage(page: Page, imageUrl: string): Promise<Buffer | undefined> {
-  const images = page.locator("img");
-  const count = Math.min(await images.count(), 100);
-  for (let index = 0; index < count; index += 1) {
-    const image = images.nth(index);
-    const source = await image.getAttribute("src").catch(() => undefined);
-    if (!source || !sameImageSource(source, imageUrl)) continue;
-    const visible = await image.isVisible().catch(() => false);
-    if (!visible) continue;
-    return image.screenshot({ type: "png", timeout: PAGE_TIMEOUT_MS }).catch(() => undefined);
+  try {
+    if (page.isClosed()) return undefined;
+    const images = page.locator("img");
+    const count = Math.min(await images.count(), 100);
+    for (let index = 0; index < count; index += 1) {
+      const image = images.nth(index);
+      const source = await image.getAttribute("src").catch(() => undefined);
+      if (!source || !sameImageSource(source, imageUrl)) continue;
+      const visible = await image.isVisible().catch(() => false);
+      if (!visible) continue;
+      return image.screenshot({ type: "png", timeout: PAGE_TIMEOUT_MS }).catch(() => undefined);
+    }
+  } catch (error) {
+    // A page can close between the isClosed check and a locator operation.
+    // This is expected for a remote browser and simply means no score is added.
+    console.warn("Could not capture listing image for optional assessment", { reason: errorMessage(error) });
   }
   return undefined;
 }
