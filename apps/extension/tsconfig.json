@@ -14,7 +14,7 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
-      "@gehackathon/shared": ["../../packages/shared/src/types.ts"]
+      "@gehackathon/shared": ["../../packages/shared/src/index.ts"]
     },
     "isolatedModules": true,
     "noEmit": true,

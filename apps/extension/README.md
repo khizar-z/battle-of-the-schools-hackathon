@@ -13,6 +13,10 @@ For a production extension bundle:
 pnpm build
 ```
 
+The extension build caps each Node build process at 384 MB, so a broken or
+unexpected dependency graph cannot consume unbounded memory. A build failure is
+reported normally instead of exhausting the machine.
+
 ## Browser support
 
 Scout ships one Manifest V3 bundle for current Chromium browsers and Firefox 121+.

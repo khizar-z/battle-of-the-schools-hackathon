@@ -20,6 +20,9 @@ pnpm build
 
 The built extension is in `apps/extension/dist`.
 
+The extension's build script limits each Node build process to 384 MB. This
+keeps TypeScript and Vite failures bounded on constrained hackathon machines.
+
 - Chromium: enable Developer mode in `chrome://extensions`, choose **Load unpacked**, and select `apps/extension/dist`.
 - Firefox: go to `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and select `apps/extension/dist/manifest.json`.
 

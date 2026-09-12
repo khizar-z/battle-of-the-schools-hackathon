@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      "@gehackathon/shared": fromProject("../../packages/shared/src/types.ts"),
+      "@gehackathon/shared": fromProject("../../packages/shared/src/index.ts"),
     },
   },
   build: {
