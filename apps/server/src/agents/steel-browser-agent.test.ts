@@ -7,6 +7,7 @@ import {
   createKijijiSearchUrl,
   extractFacebookPriceText,
   hasKijijiNoResultsText,
+  isFacebookMarketplaceHome,
   parseProductRating,
   parseSellerRating
 } from "./steel-browser-agent.js";
@@ -44,6 +45,11 @@ describe("marketplace browser recipes", () => {
 
     expect(url.origin + url.pathname).toBe("https://www.facebook.com/marketplace/search/");
     expect(url.searchParams.get("query")).toBe("used road bike");
+  });
+
+  it("only uses the Marketplace-field fallback after Facebook redirects search to its home page", () => {
+    expect(isFacebookMarketplaceHome("https://www.facebook.com/marketplace/")).toBe(true);
+    expect(isFacebookMarketplaceHome("https://www.facebook.com/marketplace/search/?query=used+bike")).toBe(false);
   });
 
   it("extracts currency-marked rent instead of a bedroom count", () => {

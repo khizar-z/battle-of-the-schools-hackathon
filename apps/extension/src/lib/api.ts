@@ -5,6 +5,29 @@ const baseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
 const mockMode = !baseUrl;
 const mockJobs = new Map<string, string[]>();
 
+function apiEndpoint(path: string): string {
+  return `${baseUrl}${path}`;
+}
+
+async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
+  const endpoint = apiEndpoint(path);
+  try {
+    return await fetch(endpoint, init);
+  } catch (error) {
+    // Fetch hides the useful browser cause from the popup. Keep the complete
+    // endpoint and browser error in the extension console for troubleshooting.
+    console.error("[Scout] API request failed", { endpoint, error });
+    throw new Error(
+      `Cannot reach the Scout API at ${baseUrl}. Start the server and rebuild the extension with VITE_API_BASE_URL set to that address.`
+    );
+  }
+}
+
+function responseError(action: string, endpoint: string, response: Response): Error {
+  console.error("[Scout] API returned an error", { action, endpoint, status: response.status, statusText: response.statusText });
+  return new Error(`${action} (HTTP ${response.status}). See the extension console for details.`);
+}
+
 export interface SearchApi {
   getSources(): Promise<MarketplaceSource[]>;
   startSearch(query: string, sources: string[]): Promise<{ jobId: string }>;
@@ -72,8 +95,8 @@ export const searchApi: SearchApi = {
   isMock: mockMode,
   async getSources() {
     if (mockMode) return defaultSources;
-    const response = await fetch(`${baseUrl}/sources`);
-    if (!response.ok) throw new Error("Unable to load marketplaces.");
+    const response = await fetchApi("/sources");
+    if (!response.ok) throw responseError("Unable to load marketplaces", apiEndpoint("/sources"), response);
     const payload = await response.json() as MarketplaceSource[] | { sources: MarketplaceSource[] };
     return Array.isArray(payload) ? payload : payload.sources;
   },
@@ -83,12 +106,12 @@ export const searchApi: SearchApi = {
       mockJobs.set(jobId, sources);
       return { jobId };
     }
-    const response = await fetch(`${baseUrl}/search`, {
+    const response = await fetchApi("/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query, sources }),
     });
-    if (!response.ok) throw new Error("Could not start this search.");
+    if (!response.ok) throw responseError("Could not start this search", apiEndpoint("/search"), response);
     return response.json() as Promise<{ jobId: string }>;
   },
   async getSearchJob(jobId) {
@@ -100,16 +123,16 @@ export const searchApi: SearchApi = {
         listings: (mockJobs.get(jobId) ?? []).flatMap((sourceId) => listingsBySource[sourceId] ?? []),
       };
     }
-    const response = await fetch(`${baseUrl}/search/${jobId}`);
-    if (!response.ok) throw new Error("Could not load the completed search results.");
+    const response = await fetchApi(`/search/${jobId}`);
+    if (!response.ok) throw responseError("Could not load the completed search results", apiEndpoint(`/search/${jobId}`), response);
     return response.json() as Promise<SearchJobSnapshot>;
   },
   subscribe(jobId, onEvent, onError) {
     if (mockMode) return mockSubscription(jobId, mockJobs.get(jobId) ?? [], onEvent);
     const controller = new AbortController();
-    fetch(`${baseUrl}/search/${jobId}/events`, { signal: controller.signal, headers: { Accept: "text/event-stream" } })
+    fetchApi(`/search/${jobId}/events`, { signal: controller.signal, headers: { Accept: "text/event-stream" } })
       .then((response) => {
-        if (!response.ok) throw new Error("Could not connect to live search updates.");
+        if (!response.ok) throw responseError("Could not connect to live search updates", apiEndpoint(`/search/${jobId}/events`), response);
         return parseSse(response, onEvent);
       })
       .catch((error: unknown) => {

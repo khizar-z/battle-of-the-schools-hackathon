@@ -40,6 +40,12 @@ VITE_API_BASE_URL=http://localhost:3000
 
 The server contract is `GET /sources`, `POST /search`, and `GET /search/:jobId/events` (SSE).
 
+Start it in a second terminal with `pnpm dev:server`, then rebuild and reload
+the unpacked extension after changing `.env.local`. The endpoint is compiled
+into the bundle. If the popup reports it cannot reach the API, its extension
+console logs the exact endpoint and browser error. The included manifest permits
+both `localhost:3000` and `127.0.0.1:3000`.
+
 ## Verification
 
 ```bash

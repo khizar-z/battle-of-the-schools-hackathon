@@ -103,9 +103,16 @@ export class SteelBrowserAgent implements BrowserAgent {
       if (!browserContext) throw new BrowserAgentError("Steel session did not expose a browser context.");
       let page = browserContext.pages()[0] ?? (await browserContext.newPage());
 
-      const recipe = await this.recipeStore.get(source.domain);
       const isEbay = source.id === "ebay";
       const isKijiji = source.id === "kijiji";
+      const destination = isFacebook
+        ? createFacebookSearchUrl(intent)
+        : isEbay
+          ? createEbaySearchUrl(intent)
+          : isKijiji
+            ? createKijijiSearchUrl(intent)
+            : sourceHomeUrl(source);
+      const recipe = await this.recipeStore.get(source.domain);
       if (isFacebook) {
         await page.goto(FACEBOOK_MARKETPLACE_URL, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
         await waitForFacebookLogin({
@@ -120,17 +127,14 @@ export class SteelBrowserAgent implements BrowserAgent {
         });
       }
 
-      const destination = isFacebook
-        ? createFacebookSearchUrl(intent)
-        : isEbay
-          ? createEbaySearchUrl(intent)
-          : isKijiji
-            ? createKijijiSearchUrl(intent)
-            : sourceHomeUrl(source);
-      await page.goto(destination, {
-        waitUntil: "domcontentloaded",
-        timeout: PAGE_TIMEOUT_MS
-      });
+      if (isFacebook) {
+        await openFacebookSearch(page, destination, marketplaceSearchTerms(intent), context);
+      } else {
+        await page.goto(destination, {
+          waitUntil: "domcontentloaded",
+          timeout: PAGE_TIMEOUT_MS
+        });
+      }
       throwIfAborted(context.signal);
       if (await pageRequiresLogin(page)) {
         context.reportStatus(
@@ -144,7 +148,11 @@ export class SteelBrowserAgent implements BrowserAgent {
         }
         page = authenticatedPage;
         context.reportStatus("searching", "Sign-in confirmed. Continuing marketplace search…", session.sessionViewerUrl || session.debugUrl);
-        await page.goto(destination, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+        if (isFacebook) {
+          await openFacebookSearch(page, destination, marketplaceSearchTerms(intent), context);
+        } else {
+          await page.goto(destination, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+        }
         throwIfAborted(context.signal);
       }
       context.reportStatus("extracting", `Reading ${source.name} listing cards…`, session.sessionViewerUrl || session.debugUrl);
@@ -298,6 +306,39 @@ export function createFacebookSearchUrl(intent: SearchIntent): string {
   const url = new URL("https://www.facebook.com/marketplace/search/");
   url.searchParams.set("query", marketplaceSearchTerms(intent));
   return url.toString();
+}
+
+async function openFacebookSearch(
+  page: Page,
+  destination: string,
+  query: string,
+  context: AgentSearchContext
+): Promise<void> {
+  await page.goto(destination, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+  if (!isFacebookMarketplaceHome(page.url())) return;
+
+  // Facebook sometimes redirects the direct search URL to Marketplace home
+  // immediately after a manual login. In that case, use its own search field
+  // rather than leaving the user at a completed login with no search running.
+  context.reportStatus("searching", "Facebook returned to Marketplace home. Submitting the requested search…");
+  const searchInput = page.locator(
+    'input[aria-label*="Search Marketplace" i], input[placeholder*="Search Marketplace" i], input[role="combobox"][aria-label*="Marketplace" i]'
+  ).first();
+  if (!(await searchInput.isVisible().catch(() => false))) {
+    throw new BrowserAgentError("Facebook returned to Marketplace home after login and did not expose a Marketplace search field.");
+  }
+  await searchInput.fill(query);
+  await searchInput.press("Enter");
+  await page.waitForLoadState("domcontentloaded", { timeout: PAGE_TIMEOUT_MS }).catch(() => undefined);
+}
+
+export function isFacebookMarketplaceHome(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return /(^|\.)facebook\.com$/i.test(parsed.hostname) && /^\/marketplace\/?$/.test(parsed.pathname);
+  } catch {
+    return false;
+  }
 }
 
 function createSteelCdpUrl(sessionId: string, apiKey: string): string {
