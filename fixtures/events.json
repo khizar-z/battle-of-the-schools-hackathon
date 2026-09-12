@@ -1,0 +1,24 @@
+[
+  { "type": "job_started", "jobId": "job_fixture" },
+  { "type": "source_started", "sourceId": "kijiji", "sourceName": "Kijiji" },
+  { "type": "source_status", "sourceId": "kijiji", "status": "searching" },
+  {
+    "type": "listing_batch",
+    "sourceId": "kijiji",
+    "listings": [
+      {
+        "id": "kijiji-123",
+        "sourceId": "kijiji",
+        "sourceName": "Kijiji",
+        "title": "Used commuter bicycle",
+        "price": 125,
+        "currency": "CAD",
+        "url": "https://www.kijiji.ca/v-bikes/toronto/example/123",
+        "extractedAt": "2026-09-12T12:00:00.000Z"
+      }
+    ]
+  },
+  { "type": "source_complete", "sourceId": "kijiji", "count": 1 },
+  { "type": "job_complete", "jobId": "job_fixture" }
+]
+

@@ -1,0 +1,10 @@
+{
+  "rawQuery": "free bicycle near downtown Toronto",
+  "item": "bicycle",
+  "maxPrice": 0,
+  "location": {
+    "raw": "downtown Toronto"
+  },
+  "condition": "any"
+}
+
