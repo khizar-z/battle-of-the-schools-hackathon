@@ -32,4 +32,12 @@ describe("parseSearchIntent", () => {
       location: { raw: "Toronto" }
     });
   });
+
+  it("recognizes a UofT housing request as a rental search", () => {
+    expect(parseSearchIntent("housing near uoft")).toMatchObject({
+      item: "housing",
+      location: { raw: "University of Toronto" },
+      searchMode: "housing"
+    });
+  });
 });

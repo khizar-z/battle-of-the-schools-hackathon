@@ -26,3 +26,8 @@ h2 { color: #284237; font-size: 14px; letter-spacing: -.01em; }.text-button { pa
 @media (max-width: 690px) { body { min-width: 420px; }.app-shell { padding: 20px; }.listing-grid { grid-template-columns: 1fr; }.controls { flex-wrap: wrap; justify-content: flex-end; }.results-heading { align-items: start; }.listing-card { min-height: 138px; } }
 .listing-image { overflow: hidden; }
 .listing-image img { width: 100%; height: 100%; object-fit: cover; }
+.status-dot.skipped { background: #9aa5a0; }
+.results-actions { display: flex; align-items: center; gap: 8px; }
+.workspace-button { white-space: nowrap; }
+.app-shell.workspace { max-width: 1120px; padding-top: 36px; }
+.sign-in-prompt { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; padding: 13px 14px; border: 1px solid #e2c582; border-radius: 12px; background: #fff8e7; color: #674914; }.sign-in-prompt strong { font-size: 12px; }.sign-in-prompt p { margin-top: 3px; color: #866b39; font-size: 11px; line-height: 1.35; }.sign-in-prompt a { flex: 0 0 auto; color: #765111; font-size: 12px; font-weight: 750; text-decoration: none; }

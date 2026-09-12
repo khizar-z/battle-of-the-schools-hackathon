@@ -11,6 +11,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@gehackathon/shared": "workspace:*",
     "@fastify/cors": "^11.1.0",
     "dotenv": "^16.6.1",

@@ -2,6 +2,7 @@ export interface SearchIntent {
   rawQuery: string;
   item: string;
   category?: string;
+  searchMode?: "housing";
   maxPrice?: number;
   minPrice?: number;
   currency?: string;
@@ -50,7 +51,7 @@ export type SearchEvent =
   | {
       type: "source_status";
       sourceId: string;
-      status: "searching" | "extracting" | "complete" | "error" | "needs_login";
+      status: "searching" | "extracting" | "complete" | "error" | "needs_login" | "skipped";
       message?: string;
       liveSessionUrl?: string;
     }

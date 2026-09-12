@@ -5,4 +5,5 @@ coverage/
 .env.local
 *.log
 data/site-recipes.json
+apps/server/data/
 .DS_Store

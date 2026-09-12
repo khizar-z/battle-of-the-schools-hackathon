@@ -3,15 +3,19 @@ import { chromium, type Page } from "playwright-core";
 import Steel from "steel-sdk";
 
 import { BrowserAgentError, type AgentSearchContext, type BrowserAgent } from "./browser-agent.js";
+import type { SteelProfileStore } from "./profile-store.js";
 import type { RecipeStore, SiteRecipe } from "../recipes/recipe-store.js";
+import { searchTermsForIntent } from "../search-policy.js";
 
-const SESSION_TIMEOUT_MS = 120_000;
+const SESSION_TIMEOUT_MS = 240_000;
 const PAGE_TIMEOUT_MS = 30_000;
+const LOGIN_WAIT_MS = 120_000;
 
 interface SteelBrowserAgentOptions {
   apiKey: string;
   sessionTimeoutMs?: number;
   recipeStore: RecipeStore;
+  profileStore: SteelProfileStore;
 }
 
 interface ExtractedEbayListing {
@@ -36,11 +40,13 @@ export class SteelBrowserAgent implements BrowserAgent {
   private readonly apiKey: string;
   private readonly sessionTimeoutMs: number;
   private readonly recipeStore: RecipeStore;
+  private readonly profileStore: SteelProfileStore;
 
   constructor(options: SteelBrowserAgentOptions) {
     this.apiKey = options.apiKey;
     this.sessionTimeoutMs = options.sessionTimeoutMs ?? SESSION_TIMEOUT_MS;
     this.recipeStore = options.recipeStore;
+    this.profileStore = options.profileStore;
     this.client = new Steel({ steelAPIKey: this.apiKey });
   }
 
@@ -50,8 +56,15 @@ export class SteelBrowserAgent implements BrowserAgent {
 
     try {
       throwIfAborted(context.signal);
-      const session = await this.client.sessions.create({ timeout: this.sessionTimeoutMs });
+      const profileId = await this.profileStore.get(source.id);
+      const session = await this.client.sessions.create({
+        timeout: this.sessionTimeoutMs,
+        persistProfile: true,
+        ...(profileId ? { profileId } : {}),
+        debugConfig: { interactive: true }
+      });
       sessionId = session.id;
+      if (session.profileId) await this.profileStore.save(source.id, session.profileId);
       context.reportStatus("searching", "Opening a live Steel browser session…", session.sessionViewerUrl || session.debugUrl);
 
       const cdpUrl = new URL(session.websocketUrl);
@@ -71,6 +84,20 @@ export class SteelBrowserAgent implements BrowserAgent {
         timeout: PAGE_TIMEOUT_MS
       });
       throwIfAborted(context.signal);
+      if (await pageRequiresLogin(page)) {
+        context.reportStatus(
+          "needs_login",
+          `${source.name} needs sign-in. Complete it in the live Steel session to continue this search.`,
+          session.sessionViewerUrl || session.debugUrl
+        );
+        const signedIn = await waitForSignIn(page, context.signal);
+        if (!signedIn) {
+          throw new BrowserAgentError(`${source.name} sign-in was not completed before the session expired.`);
+        }
+        context.reportStatus("searching", "Sign-in confirmed. Continuing marketplace search…", session.sessionViewerUrl || session.debugUrl);
+        await page.goto(destination, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+        throwIfAborted(context.signal);
+      }
       context.reportStatus("extracting", `Reading ${source.name} listing cards…`, session.sessionViewerUrl || session.debugUrl);
 
       if (isEbay) {
@@ -128,7 +155,7 @@ async function discoverGenericSearch(page: Page, source: MarketplaceSource, inte
   if (!(await searchInput.isVisible().catch(() => false))) {
     throw new BrowserAgentError(`${source.name} does not expose a discoverable search box.`);
   }
-  await searchInput.fill(intent.item);
+  await searchInput.fill(searchTermsForIntent(intent));
   await searchInput.press("Enter");
   await page.waitForLoadState("domcontentloaded", { timeout: PAGE_TIMEOUT_MS }).catch(() => undefined);
 
@@ -169,7 +196,7 @@ async function discoverGenericSearch(page: Page, source: MarketplaceSource, inte
 
 export function createEbaySearchUrl(intent: SearchIntent): string {
   const url = new URL("https://www.ebay.ca/sch/i.html");
-  url.searchParams.set("_nkw", intent.item);
+  url.searchParams.set("_nkw", searchTermsForIntent(intent));
   if (intent.maxPrice !== undefined) url.searchParams.set("_udhi", String(intent.maxPrice));
   if (intent.minPrice !== undefined) url.searchParams.set("_udlo", String(intent.minPrice));
   if (intent.condition === "used") url.searchParams.set("LH_ItemCondition", "3000");
@@ -178,12 +205,31 @@ export function createEbaySearchUrl(intent: SearchIntent): string {
 }
 
 export function createKijijiSearchUrl(intent: SearchIntent): string {
-  const listingSlug = intent.item
+  const listingSlug = searchTermsForIntent(intent)
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+  if (intent.searchMode === "housing") {
+    return `https://www.kijiji.ca/b-for-rent/gta-greater-toronto-area/${listingSlug || "rentals"}/k0c30349001l1700272`;
+  }
   return `https://www.kijiji.ca/b-gta-greater-toronto-area/${listingSlug || "search"}/k0l1700272`;
+}
+
+async function pageRequiresLogin(page: Page): Promise<boolean> {
+  const urlLooksLikeLogin = /(?:login|log-in|signin|sign-in|checkpoint)/i.test(page.url());
+  if (urlLooksLikeLogin) return true;
+  return page.locator('input[type="password"], input[name="email"], input[name="username"]').first().isVisible().catch(() => false);
+}
+
+async function waitForSignIn(page: Page, signal: AbortSignal): Promise<boolean> {
+  const deadline = Date.now() + LOGIN_WAIT_MS;
+  while (Date.now() < deadline) {
+    throwIfAborted(signal);
+    if (!(await pageRequiresLogin(page))) return true;
+    await page.waitForTimeout(1_000);
+  }
+  return false;
 }
 
 async function extractEbayListings(page: Page): Promise<ExtractedEbayListing[]> {

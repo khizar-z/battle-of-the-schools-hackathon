@@ -3,6 +3,7 @@ import type { Listing, MarketplaceSource, SearchEvent, SearchIntent } from "@geh
 import type { BrowserAgent } from "./agents/browser-agent.js";
 import { createBrowserAgent } from "./agents/create-browser-agent.js";
 import { dedupeListings, rankListings } from "./ranking/listings.js";
+import { filterListingsForIntent, unsupportedSourceReason } from "./search-policy.js";
 
 export type SearchJobStatus = "running" | "complete";
 
@@ -38,7 +39,7 @@ export class SearchJobManager {
 
   constructor(options: SearchJobManagerOptions = {}) {
     this.agent = options.agent ?? createBrowserAgent(options);
-    this.sourceTimeoutMs = options.sourceTimeoutMs ?? 90_000;
+    this.sourceTimeoutMs = options.sourceTimeoutMs ?? 210_000;
     this.sourceRetryCount = options.sourceRetryCount ?? 1;
   }
 
@@ -87,6 +88,12 @@ export class SearchJobManager {
 
   private async runSource(job: StoredSearchJob, source: MarketplaceSource, sourceIndex: number): Promise<void> {
     this.emit(job, { type: "source_started", sourceId: source.id, sourceName: source.name });
+    const unsupportedReason = unsupportedSourceReason(source, job.intent);
+    if (unsupportedReason) {
+      this.emit(job, { type: "source_status", sourceId: source.id, status: "skipped", message: unsupportedReason });
+      this.emit(job, { type: "source_complete", sourceId: source.id, count: 0 });
+      return;
+    }
     const controller = new AbortController();
     const timeoutError = new Error("Marketplace search timed out");
     let rejectTimeout!: (error: Error) => void;
@@ -101,9 +108,9 @@ export class SearchJobManager {
 
     try {
       const rawListings = await this.searchWithRetry(job, source, sourceIndex, controller, timeoutPromise);
-      listings = rankListings(dedupeListings(rawListings, job.listings), job.intent);
+      listings = rankListings(filterListingsForIntent(dedupeListings(rawListings, job.listings), job.intent), job.intent);
       job.listings = rankListings([...job.listings, ...listings], job.intent);
-      this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
+      if (listings.length) this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
     } catch (error) {
       this.emit(job, {
         type: "source_status",

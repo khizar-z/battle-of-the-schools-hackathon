@@ -18,4 +18,10 @@ describe("marketplace browser recipes", () => {
       "https://www.kijiji.ca/b-gta-greater-toronto-area/dumbbells/k0l1700272"
     );
   });
+
+  it("routes housing searches into Kijiji's rental category with concrete terms", () => {
+    expect(createKijijiSearchUrl(parseSearchIntent("housing near uoft"))).toBe(
+      "https://www.kijiji.ca/b-for-rent/gta-greater-toronto-area/apartment-rental-room-university-of-toronto/k0c30349001l1700272"
+    );
+  });
 });

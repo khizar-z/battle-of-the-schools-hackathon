@@ -48,4 +48,17 @@ describe("searchReducer", () => {
     expect(next.listings).toEqual([listing]);
     expect(next.sourceProgress.ebay).toMatchObject({ phase: "error", message: "Timed out" });
   });
+
+  it("keeps a sign-in-required source visible after its search completes", () => {
+    const signInRequired = searchReducer(initialSearchState, {
+      type: "event",
+      event: { type: "source_status", sourceId: "facebook", status: "needs_login", message: "Sign in first" }
+    });
+    const completed = searchReducer(signInRequired, {
+      type: "event",
+      event: { type: "source_complete", sourceId: "facebook", count: 0 }
+    });
+
+    expect(completed.sourceProgress.facebook).toMatchObject({ phase: "needs_login", message: "Sign in first", count: 0 });
+  });
 });

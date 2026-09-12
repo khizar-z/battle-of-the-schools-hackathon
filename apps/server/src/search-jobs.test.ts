@@ -54,4 +54,18 @@ describe("SearchJobManager", () => {
     expect(attempts).toBe(2);
     expect(job.events).toContainEqual(expect.objectContaining({ message: "Retrying marketplace search (1/1)…" }));
   });
+
+  it("skips eBay for a local rental search", async () => {
+    let calls = 0;
+    const agent: BrowserAgent = { search: async () => { calls += 1; return []; } };
+    const jobs = new SearchJobManager({ agent });
+    const job = jobs.start(
+      { rawQuery: "housing near uoft", item: "housing", searchMode: "housing" },
+      [{ id: "ebay", name: "eBay", domain: "ebay.ca", enabled: true }]
+    );
+    await job.done;
+
+    expect(calls).toBe(0);
+    expect(job.events).toContainEqual(expect.objectContaining({ type: "source_status", status: "skipped" }));
+  });
 });

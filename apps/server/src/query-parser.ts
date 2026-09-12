@@ -3,6 +3,7 @@ import type { SearchIntent } from "@gehackathon/shared";
 const PRICE_PATTERN = /\b(?:under|below|less than|up to|max(?:imum)? of?)\s*(?:c\$|cad\s*|\$)?\s*(\d+(?:[,.]\d+)*)/i;
 const MIN_PRICE_PATTERN = /\b(?:over|above|more than|at least|min(?:imum)? of?)\s*(?:c\$|cad\s*|\$)?\s*(\d+(?:[,.]\d+)*)/i;
 const LOCATION_PATTERN = /\b(?:near|around|in)\s+(.+?)(?=\s+\b(?:under|below|less than|up to|max(?:imum)?|over|above|more than|at least|min(?:imum)?|pickup only)\b|$)/i;
+const HOUSING_PATTERN = /\b(?:housing|apartment|apartments|room|rooms|rental|rentals|rent|sublet|sublease|lease|condo|condos|roommate|basement)\b/i;
 
 function parsePrice(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -33,6 +34,7 @@ export function parseSearchIntent(rawQuery: string): SearchIntent {
       ? trailingCommaLocationMatch[1].trim()
       : undefined;
   const condition = /\bnew\b/i.test(raw) ? "new" : /\bused\b|secondhand|pre-owned/i.test(raw) ? "used" : "any";
+  const isHousingSearch = HOUSING_PATTERN.test(raw);
 
   let item = raw
     .replace(LOCATION_PATTERN, " ")
@@ -59,9 +61,16 @@ export function parseSearchIntent(rawQuery: string): SearchIntent {
     ...(minPriceMatch ? { minPrice: parsePrice(minPriceMatch[1]) } : {}),
     ...(includesDollar ? { currency: "CAD" } : {}),
     ...(locationMatch?.[1] || implicitLocation
-      ? { location: { raw: locationMatch?.[1]?.trim() ?? implicitLocation! } }
+      ? { location: { raw: normalizeLocation(locationMatch?.[1]?.trim() ?? implicitLocation!) } }
       : {}),
+    ...(isHousingSearch ? { searchMode: "housing" as const } : {}),
     condition,
     ...(lower.includes("pickup only") ? { pickupOnly: true } : {})
   };
+}
+
+function normalizeLocation(location: string): string {
+  return /^(?:uoft|u\s*of\s*t|university\s+of\s+toronto)$/i.test(location.trim())
+    ? "University of Toronto"
+    : location;
 }

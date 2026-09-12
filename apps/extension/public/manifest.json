@@ -12,7 +12,7 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "tabs"],
   "host_permissions": ["http://localhost:3000/*"],
   "minimum_chrome_version": "121",
   "browser_specific_settings": {

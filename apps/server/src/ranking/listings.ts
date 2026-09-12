@@ -1,5 +1,7 @@
 import type { Listing, SearchIntent } from "@gehackathon/shared";
 
+import { searchTermsForIntent } from "../search-policy.js";
+
 const TRACKING_PARAMETERS = new Set(["fbclid", "gclid", "mc_cid", "mc_eid"]);
 
 export function normalizeListing(listing: Listing): Listing {
@@ -40,7 +42,7 @@ export function rankListings(listings: Listing[], intent: SearchIntent): Listing
 
 export function scoreListing(listing: Listing, intent: SearchIntent): number {
   const text = `${listing.title} ${listing.description ?? ""}`;
-  const targetTerms = tokens([intent.item, ...(intent.keywords ?? [])].join(" "));
+  const targetTerms = tokens([searchTermsForIntent(intent), ...(intent.keywords ?? [])].join(" "));
   const textTerms = new Set(tokens(text));
   const matchingTerms = targetTerms.filter((term) => textTerms.has(term)).length;
   const relevance = targetTerms.length ? (matchingTerms / targetTerms.length) * 50 : 0;
@@ -105,4 +107,3 @@ function jaccardSimilarity(left: string[], right: string[]): number {
   const union = new Set([...leftTerms, ...rightTerms]).size;
   return union ? intersection / union : 0;
 }
-

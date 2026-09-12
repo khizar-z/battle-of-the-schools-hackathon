@@ -1,6 +1,7 @@
 import { BrowserAgentError, type BrowserAgent } from "./browser-agent.js";
 import { MockBrowserAgent } from "./mock-browser-agent.js";
 import { SteelBrowserAgent } from "./steel-browser-agent.js";
+import { createSteelProfileStore, type SteelProfileStore } from "./profile-store.js";
 import { createRecipeStore, type RecipeStore } from "../recipes/recipe-store.js";
 
 export interface CreateBrowserAgentOptions {
@@ -8,6 +9,7 @@ export interface CreateBrowserAgentOptions {
   mockDelayMs?: number;
   steelApiKey?: string;
   recipeStore?: RecipeStore;
+  profileStore?: SteelProfileStore;
 }
 
 export function createBrowserAgent(options: CreateBrowserAgentOptions = {}): BrowserAgent {
@@ -23,5 +25,9 @@ export function createBrowserAgent(options: CreateBrowserAgentOptions = {}): Bro
     };
   }
 
-  return new SteelBrowserAgent({ apiKey: steelApiKey, recipeStore: options.recipeStore ?? createRecipeStore() });
+  return new SteelBrowserAgent({
+    apiKey: steelApiKey,
+    recipeStore: options.recipeStore ?? createRecipeStore(),
+    profileStore: options.profileStore ?? createSteelProfileStore()
+  });
 }

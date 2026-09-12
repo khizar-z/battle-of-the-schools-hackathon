@@ -1,6 +1,6 @@
 import type { Listing, MarketplaceSource, SearchIntent } from "@gehackathon/shared";
 
-export type AgentPhase = "searching" | "extracting";
+export type AgentPhase = "searching" | "extracting" | "needs_login";
 
 export interface AgentSearchContext {
   sourceIndex: number;
@@ -22,4 +22,3 @@ export class BrowserAgentError extends Error {
     this.name = "BrowserAgentError";
   }
 }
-
