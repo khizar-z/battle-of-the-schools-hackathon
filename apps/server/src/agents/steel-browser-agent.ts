@@ -1,5 +1,5 @@
 import type { Listing, MarketplaceSource, SearchIntent } from "@gehackathon/shared";
-import { chromium } from "playwright-core";
+import { chromium, type Page } from "playwright-core";
 import Steel from "steel-sdk";
 
 import { BrowserAgentError, type AgentSearchContext, type BrowserAgent } from "./browser-agent.js";
@@ -20,7 +20,15 @@ interface ExtractedEbayListing {
   condition?: string;
 }
 
-/** Real cloud-browser implementation. The first deterministic recipe targets eBay. */
+interface ExtractedKijijiListing {
+  title: string;
+  url: string;
+  priceText?: string;
+  location?: string;
+  description?: string;
+}
+
+/** Real cloud-browser implementation with deterministic marketplace recipes. */
 export class SteelBrowserAgent implements BrowserAgent {
   private readonly client: Steel;
   private readonly apiKey: string;
@@ -33,7 +41,7 @@ export class SteelBrowserAgent implements BrowserAgent {
   }
 
   async search(source: MarketplaceSource, intent: SearchIntent, context: AgentSearchContext): Promise<Listing[]> {
-    if (source.id !== "ebay") {
+    if (source.id !== "ebay" && source.id !== "kijiji") {
       throw new BrowserAgentError(`${source.name} does not have a browser recipe yet.`);
     }
 
@@ -54,29 +62,25 @@ export class SteelBrowserAgent implements BrowserAgent {
       if (!browserContext) throw new BrowserAgentError("Steel session did not expose a browser context.");
       const page = browserContext.pages()[0] ?? (await browserContext.newPage());
 
-      await page.goto(createEbaySearchUrl(intent), { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+      const isEbay = source.id === "ebay";
+      await page.goto(isEbay ? createEbaySearchUrl(intent) : createKijijiSearchUrl(intent), {
+        waitUntil: "domcontentloaded",
+        timeout: PAGE_TIMEOUT_MS
+      });
       throwIfAborted(context.signal);
-      context.reportStatus("extracting", "Reading eBay listing cards…", session.sessionViewerUrl || session.debugUrl);
-      await page.waitForSelector("li.s-item", { timeout: PAGE_TIMEOUT_MS });
+      context.reportStatus("extracting", `Reading ${source.name} listing cards…`, session.sessionViewerUrl || session.debugUrl);
 
-      const extracted = await page.locator("li.s-item").evaluateAll((cards) =>
-        cards.slice(0, 24).flatMap((card) => {
-          const title = card.querySelector(".s-item__title")?.textContent?.trim();
-          const link = card.querySelector("a.s-item__link") as HTMLAnchorElement | null;
-          const url = link?.href;
-          if (!title || !url || title.toLowerCase() === "shop on ebay") return [];
+      if (isEbay) {
+        await page.waitForSelector("li.s-item", { timeout: PAGE_TIMEOUT_MS });
+        const extracted = await extractEbayListings(page);
+        return extracted.map((listing, index) => normalizeEbayListing(listing, source, intent, index));
+      }
 
-          return [{
-            title,
-            url,
-            priceText: card.querySelector(".s-item__price")?.textContent?.trim(),
-            imageUrl: (card.querySelector(".s-item__image-img") as HTMLImageElement | null)?.src,
-            condition: card.querySelector(".SECONDARY_INFO")?.textContent?.trim()
-          }];
-        })
-      );
-
-      return extracted.map((listing, index) => normalizeEbayListing(listing, source, intent, index));
+      await page.waitForSelector('[data-testid="listing-link"]', { timeout: PAGE_TIMEOUT_MS });
+      const extracted = await extractKijijiListings(page);
+      return extracted
+        .map((listing, index) => normalizeKijijiListing(listing, source, index))
+        .filter((listing) => isWithinPriceRange(listing, intent));
     } catch (error) {
       if (error instanceof BrowserAgentError) throw error;
       throw new BrowserAgentError(`Steel browser search failed: ${errorMessage(error)}`);
@@ -87,7 +91,7 @@ export class SteelBrowserAgent implements BrowserAgent {
   }
 }
 
-function createEbaySearchUrl(intent: SearchIntent): string {
+export function createEbaySearchUrl(intent: SearchIntent): string {
   const url = new URL("https://www.ebay.ca/sch/i.html");
   url.searchParams.set("_nkw", intent.item);
   if (intent.maxPrice !== undefined) url.searchParams.set("_udhi", String(intent.maxPrice));
@@ -95,6 +99,56 @@ function createEbaySearchUrl(intent: SearchIntent): string {
   if (intent.condition === "used") url.searchParams.set("LH_ItemCondition", "3000");
   if (intent.condition === "new") url.searchParams.set("LH_ItemCondition", "1000");
   return url.toString();
+}
+
+export function createKijijiSearchUrl(intent: SearchIntent): string {
+  const listingSlug = intent.item
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `https://www.kijiji.ca/b-gta-greater-toronto-area/${listingSlug || "search"}/k0l1700272`;
+}
+
+async function extractEbayListings(page: Page): Promise<ExtractedEbayListing[]> {
+  return page.locator("li.s-item").evaluateAll((cards: Element[]) =>
+    cards.slice(0, 24).flatMap((card) => {
+      const title = card.querySelector(".s-item__title")?.textContent?.trim();
+      const link = card.querySelector("a.s-item__link") as HTMLAnchorElement | null;
+      const url = link?.href;
+      if (!title || !url || title.toLowerCase() === "shop on ebay") return [];
+
+      return [{
+        title,
+        url,
+        priceText: card.querySelector(".s-item__price")?.textContent?.trim(),
+        imageUrl: (card.querySelector(".s-item__image-img") as HTMLImageElement | null)?.src,
+        condition: card.querySelector(".SECONDARY_INFO")?.textContent?.trim()
+      }];
+    })
+  );
+}
+
+async function extractKijijiListings(page: Page): Promise<ExtractedKijijiListing[]> {
+  return page.locator('[data-testid="listing-link"]').evaluateAll((links: Element[]) =>
+    links.slice(0, 24).flatMap((link) => {
+      const anchor = link as HTMLAnchorElement;
+      const title = anchor.textContent?.trim();
+      const url = anchor.href;
+      if (!title || !url) return [];
+
+      let card: Element | null = anchor.parentElement;
+      while (card && !card.querySelector('[data-testid="listing-price"]')) card = card.parentElement;
+
+      return [{
+        title,
+        url,
+        priceText: card?.querySelector('[data-testid="listing-price"]')?.textContent?.trim(),
+        location: card?.querySelector('[data-testid="listing-location"]')?.textContent?.trim(),
+        description: card?.querySelector('[data-testid="listing-description"]')?.textContent?.trim()
+      }];
+    })
+  );
 }
 
 function normalizeEbayListing(
@@ -122,6 +176,33 @@ function normalizeEbayListing(
   };
 }
 
+function normalizeKijijiListing(listing: ExtractedKijijiListing, source: MarketplaceSource, index: number): Listing {
+  const price = parsePrice(listing.priceText);
+  const canonicalUrl = new URL(listing.url);
+  canonicalUrl.search = "";
+
+  return {
+    id: canonicalUrl.pathname.split("/").filter(Boolean).at(-1) ?? `kijiji-${index}`,
+    sourceId: source.id,
+    sourceName: source.name,
+    title: listing.title,
+    ...(price === undefined ? {} : { price }),
+    currency: "CAD",
+    url: canonicalUrl.toString(),
+    location: listing.location,
+    description: listing.description,
+    extractedAt: new Date().toISOString(),
+    confidence: 0.9
+  };
+}
+
+function isWithinPriceRange(listing: Listing, intent: SearchIntent): boolean {
+  if (listing.price === undefined) return intent.minPrice === undefined && intent.maxPrice === undefined;
+  if (intent.minPrice !== undefined && listing.price < intent.minPrice) return false;
+  if (intent.maxPrice !== undefined && listing.price > intent.maxPrice) return false;
+  return true;
+}
+
 function parsePrice(priceText: string | undefined): number | undefined {
   if (!priceText) return undefined;
   const value = Number.parseFloat(priceText.replace(/[^\d.,]/g, "").replaceAll(",", ""));
@@ -135,4 +216,3 @@ function throwIfAborted(signal: AbortSignal): void {
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown browser error";
 }
-
