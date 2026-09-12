@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 
 import { buildApp } from "./app.js";
+import { SearchJobManager } from "./search-jobs.js";
 
 const app = buildApp();
 
@@ -22,5 +23,31 @@ describe("server", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().sources).toHaveLength(4);
   });
-});
 
+  it("starts a validated search job", async () => {
+    const jobs = new SearchJobManager({ mockAgents: true, mockDelayMs: 0 });
+    const testApp = buildApp({ jobs });
+    const response = await testApp.inject({
+      method: "POST",
+      url: "/search",
+      payload: { query: "used desk under $50", sources: ["kijiji"] }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const { jobId } = response.json();
+    const job = jobs.get(jobId);
+    await job?.done;
+    expect(job?.events.at(-1)).toEqual({ type: "job_complete", jobId });
+    await testApp.close();
+  });
+
+  it("rejects unknown marketplace sources", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/search",
+      payload: { query: "bike", sources: ["not-a-marketplace"] }
+    });
+
+    expect(response.statusCode).toBe(400);
+  });
+});

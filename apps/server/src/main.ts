@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import { buildApp } from "./app.js";
 
 const app = buildApp();
@@ -9,4 +11,3 @@ try {
   app.log.error(error);
   process.exit(1);
 }
-
