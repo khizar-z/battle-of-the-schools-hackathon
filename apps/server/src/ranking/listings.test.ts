@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { Listing } from "@gehackathon/shared";
 
-import { filterListingsForIntent } from "../search-policy.js";
 import { dedupeListings, rankListings } from "./listings.js";
 
 const extractedAt = "2026-09-12T12:00:00.000Z";
@@ -62,16 +61,16 @@ describe("listing aggregation", () => {
     expect(ranked[0].rankScore).toBeGreaterThan(ranked[1].rankScore ?? 0);
   });
 
-  it("removes mechanical housing parts from a rental search", () => {
+  it("gives model relevance more weight than literal keyword overlap", () => {
     const intent = { rawQuery: "housing near uoft", item: "housing", searchMode: "housing" as const };
-    const filtered = filterListingsForIntent(
+    const ranked = rankListings(
       [
-        listing({ title: "Transmission housing for Toyota", url: "https://example.com/part" }),
-        listing({ title: "One-bedroom apartment near UofT", url: "https://example.com/apartment" })
+        listing({ title: "Transmission housing for Toyota", relevanceScore: 5, url: "https://example.com/part" }),
+        listing({ title: "One-bedroom apartment near UofT", relevanceScore: 96, url: "https://example.com/apartment" })
       ],
       intent
     );
 
-    expect(filtered).toEqual([expect.objectContaining({ title: "One-bedroom apartment near UofT" })]);
+    expect(ranked[0]).toMatchObject({ title: "One-bedroom apartment near UofT", relevanceScore: 96 });
   });
 });

@@ -2,8 +2,8 @@ import type { Listing, MarketplaceSource, SearchEvent, SearchIntent } from "@geh
 
 import type { BrowserAgent } from "./agents/browser-agent.js";
 import { createBrowserAgent } from "./agents/create-browser-agent.js";
+import { createListingRanker, type ListingRanker } from "./listing-relevance-service.js";
 import { dedupeListings, rankListings } from "./ranking/listings.js";
-import { filterListingsForIntent, unsupportedSourceReason } from "./search-policy.js";
 
 export type SearchJobStatus = "running" | "complete";
 
@@ -28,6 +28,7 @@ export interface SearchJobManagerOptions {
   mockDelayMs?: number;
   sourceTimeoutMs?: number;
   sourceRetryCount?: number;
+  ranker?: ListingRanker;
 }
 
 export class SearchJobManager {
@@ -36,11 +37,15 @@ export class SearchJobManager {
   private readonly agent: BrowserAgent;
   private readonly sourceTimeoutMs: number;
   private readonly sourceRetryCount: number;
+  private readonly ranker: ListingRanker;
 
   constructor(options: SearchJobManagerOptions = {}) {
     this.agent = options.agent ?? createBrowserAgent(options);
-    this.sourceTimeoutMs = options.sourceTimeoutMs ?? 210_000;
+    // Manual marketplace sign-in is interactive, so allow enough time for it
+    // to complete and for the authenticated browser to resume the search.
+    this.sourceTimeoutMs = options.sourceTimeoutMs ?? 360_000;
     this.sourceRetryCount = options.sourceRetryCount ?? 1;
+    this.ranker = options.ranker ?? createListingRanker();
   }
 
   start(intent: SearchIntent, sources: MarketplaceSource[]): SearchJob {
@@ -88,12 +93,6 @@ export class SearchJobManager {
 
   private async runSource(job: StoredSearchJob, source: MarketplaceSource, sourceIndex: number): Promise<void> {
     this.emit(job, { type: "source_started", sourceId: source.id, sourceName: source.name });
-    const unsupportedReason = unsupportedSourceReason(source, job.intent);
-    if (unsupportedReason) {
-      this.emit(job, { type: "source_status", sourceId: source.id, status: "skipped", message: unsupportedReason });
-      this.emit(job, { type: "source_complete", sourceId: source.id, count: 0 });
-      return;
-    }
     const controller = new AbortController();
     const timeoutError = new Error("Marketplace search timed out");
     let rejectTimeout!: (error: Error) => void;
@@ -108,7 +107,14 @@ export class SearchJobManager {
 
     try {
       const rawListings = await this.searchWithRetry(job, source, sourceIndex, controller, timeoutPromise);
-      listings = rankListings(filterListingsForIntent(dedupeListings(rawListings, job.listings), job.intent), job.intent);
+      const candidates = dedupeListings(rawListings, job.listings);
+      this.emit(job, {
+        type: "source_status",
+        sourceId: source.id,
+        status: "ranking",
+        message: `Evaluating ${candidates.length} candidate listings for relevance…`
+      });
+      listings = rankListings(await this.ranker.rank(job.intent, candidates), job.intent);
       job.listings = rankListings([...job.listings, ...listings], job.intent);
       if (listings.length) this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
     } catch (error) {

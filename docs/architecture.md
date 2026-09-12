@@ -5,8 +5,9 @@ Scout is a browser extension backed by a small TypeScript API.
 ```text
 Extension search form
   -> POST /search
-  -> query parser (Claude tool call, OpenAI Structured Outputs, or local fallback)
+  -> intent parser (Claude tool call, OpenAI Structured Outputs, or local fallback)
   -> parallel BrowserAgent searches
+  -> semantic listing judge (same LLM provider, or deterministic fallback)
   -> normalization, deduplication, ranking
   -> SSE listing batches + GET /search/:jobId snapshot
 ```

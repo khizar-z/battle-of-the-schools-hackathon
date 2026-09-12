@@ -9,6 +9,7 @@ const phaseLabel: Record<SourceProgress["phase"], string> = {
   idle: "Queued",
   searching: "Searching…",
   extracting: "Extracting…",
+  ranking: "AI is evaluating matches…",
   complete: "Complete",
   error: "Couldn’t search",
   needs_login: "Sign-in needed",

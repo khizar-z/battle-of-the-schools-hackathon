@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import manifest from "../public/manifest.json";
 
 describe("cross-browser manifest", () => {
-  it("declares both MV3 background environments", () => {
+  it("declares a Manifest V3 module service worker", () => {
     expect(manifest.manifest_version).toBe(3);
     expect(manifest.background.service_worker).toBe("background.js");
-    expect(manifest.background.scripts).toEqual(["background.js"]);
+    expect(manifest.background.type).toBe("module");
+    expect(manifest.background).not.toHaveProperty("scripts");
   });
 
   it("declares supported browser baselines", () => {

@@ -57,7 +57,7 @@ export class OpenAIQueryParser implements QueryParser {
         model: this.model,
         store: false,
         instructions:
-          "Extract secondhand-shopping search intent. Preserve the exact query. Infer only explicit constraints; use null for missing optional fields. Set condition to any unless new or used is explicit. Set searchMode to housing only for homes, apartments, rooms, rentals, sublets, or roommates; otherwise use null. For housing, use concrete rental terms rather than housing alone, and normalize UofT to University of Toronto in location.raw.",
+          "Extract secondhand-shopping search intent. Preserve the exact query. Infer only explicit constraints; use null for missing optional fields. These fields guide later relevance judgement and must not rewrite or narrow the user's raw marketplace query. Set condition to any unless new or used is explicit. Set searchMode to housing only for homes, apartments, rooms, rentals, sublets, or roommates; otherwise use null. Normalize UofT to University of Toronto in location.raw.",
         input: rawQuery,
         text: { format: zodTextFormat(modelIntentSchema, "search_intent") }
       });
@@ -87,7 +87,7 @@ export class AnthropicQueryParser implements QueryParser {
         model: this.model,
         max_tokens: 500,
         system:
-          "Extract secondhand-shopping search intent. Preserve the exact query. Infer only explicit constraints; use null for missing optional fields. Set condition to any unless new or used is explicit. Set searchMode to housing only for homes, apartments, rooms, rentals, sublets, or roommates; otherwise use null. For housing, use concrete rental terms rather than housing alone, and normalize UofT to University of Toronto in location.raw.",
+          "Extract secondhand-shopping search intent. Preserve the exact query. Infer only explicit constraints; use null for missing optional fields. These fields guide later relevance judgement and must not rewrite or narrow the user's raw marketplace query. Set condition to any unless new or used is explicit. Set searchMode to housing only for homes, apartments, rooms, rentals, sublets, or roommates; otherwise use null. Normalize UofT to University of Toronto in location.raw.",
         messages: [{ role: "user", content: rawQuery }],
         tools: [
           {

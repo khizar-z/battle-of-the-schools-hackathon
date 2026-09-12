@@ -1,7 +1,7 @@
 import type { Listing, MarketplaceSource, SearchEvent, SearchJobSnapshot } from "@gehackathon/shared";
 
 export type SearchStatus = "idle" | "running" | "complete" | "error";
-export type SourcePhase = "idle" | "searching" | "extracting" | "complete" | "error" | "needs_login" | "skipped";
+export type SourcePhase = "idle" | "searching" | "extracting" | "ranking" | "complete" | "error" | "needs_login" | "skipped";
 
 export interface SourceProgress {
   phase: SourcePhase;

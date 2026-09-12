@@ -43,6 +43,8 @@ export interface Listing {
   description?: string;
   extractedAt: string;
   confidence?: number;
+  relevanceScore?: number;
+  rankScore?: number;
 }
 
 export type SearchEvent =
@@ -51,7 +53,7 @@ export type SearchEvent =
   | {
       type: "source_status";
       sourceId: string;
-      status: "searching" | "extracting" | "complete" | "error" | "needs_login" | "skipped";
+      status: "searching" | "extracting" | "ranking" | "complete" | "error" | "needs_login" | "skipped";
       message?: string;
       liveSessionUrl?: string;
     }

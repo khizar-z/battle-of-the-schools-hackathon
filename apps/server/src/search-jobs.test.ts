@@ -55,7 +55,7 @@ describe("SearchJobManager", () => {
     expect(job.events).toContainEqual(expect.objectContaining({ message: "Retrying marketplace search (1/1)…" }));
   });
 
-  it("skips eBay for a local rental search", async () => {
+  it("searches every selected source instead of imposing a housing source policy", async () => {
     let calls = 0;
     const agent: BrowserAgent = { search: async () => { calls += 1; return []; } };
     const jobs = new SearchJobManager({ agent });
@@ -65,7 +65,7 @@ describe("SearchJobManager", () => {
     );
     await job.done;
 
-    expect(calls).toBe(0);
-    expect(job.events).toContainEqual(expect.objectContaining({ type: "source_status", status: "skipped" }));
+    expect(calls).toBe(1);
+    expect(job.events).not.toContainEqual(expect.objectContaining({ type: "source_status", status: "skipped" }));
   });
 });
