@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import type { SearchEvent } from "./schemas.js";
-import { marketplaceSourceSchema, searchEventSchema } from "./schemas.js";
+import { listingSchema, marketplaceSourceSchema, searchEventSchema, searchIntentSchema } from "./schemas.js";
 
 export const createSearchRequestSchema = z.object({
   query: z.string().trim().min(1).max(500),
@@ -18,9 +18,17 @@ export const sourcesResponseSchema = z.object({
 
 export const searchEventsResponseSchema = z.array(searchEventSchema);
 
+export const searchJobSnapshotSchema = z.object({
+  jobId: z.string().min(1),
+  status: z.enum(["running", "complete"]),
+  intent: searchIntentSchema,
+  listings: z.array(listingSchema)
+});
+
 export type CreateSearchRequest = z.infer<typeof createSearchRequestSchema>;
 export type CreateSearchResponse = z.infer<typeof createSearchResponseSchema>;
 export type SourcesResponse = z.infer<typeof sourcesResponseSchema>;
+export type SearchJobSnapshot = z.infer<typeof searchJobSnapshotSchema>;
 
 /**
  * The extension's boundary to the backend. The concrete browser client can be
@@ -29,5 +37,6 @@ export type SourcesResponse = z.infer<typeof sourcesResponseSchema>;
 export interface MarketplaceSearchApi {
   createSearch(request: CreateSearchRequest): Promise<CreateSearchResponse>;
   listSources(): Promise<SourcesResponse>;
+  getSearchJob(jobId: string): Promise<SearchJobSnapshot>;
   subscribeToSearchEvents(jobId: string, onEvent: (event: SearchEvent) => void): () => void;
 }

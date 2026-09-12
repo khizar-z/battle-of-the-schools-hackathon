@@ -1,5 +1,9 @@
 import type { Listing, MarketplaceSource, SearchEvent, SearchIntent } from "@gehackathon/shared";
 
+import type { BrowserAgent } from "./agents/browser-agent.js";
+import { createBrowserAgent } from "./agents/create-browser-agent.js";
+import { dedupeListings, rankListings } from "./ranking/listings.js";
+
 export type SearchJobStatus = "running" | "complete";
 
 export interface SearchJob {
@@ -7,6 +11,7 @@ export interface SearchJob {
   intent: SearchIntent;
   sources: MarketplaceSource[];
   events: SearchEvent[];
+  listings: Listing[];
   status: SearchJobStatus;
   done: Promise<void>;
 }
@@ -17,21 +22,24 @@ interface StoredSearchJob extends SearchJob {
 }
 
 export interface SearchJobManagerOptions {
+  agent?: BrowserAgent;
   mockAgents?: boolean;
   mockDelayMs?: number;
+  sourceTimeoutMs?: number;
+  sourceRetryCount?: number;
 }
-
-const FIXTURE_TIME = "2026-09-12T12:00:00.000Z";
 
 export class SearchJobManager {
   private readonly jobs = new Map<string, StoredSearchJob>();
   private nextJobNumber = 1;
-  private readonly mockAgents: boolean;
-  private readonly mockDelayMs: number;
+  private readonly agent: BrowserAgent;
+  private readonly sourceTimeoutMs: number;
+  private readonly sourceRetryCount: number;
 
   constructor(options: SearchJobManagerOptions = {}) {
-    this.mockAgents = options.mockAgents ?? process.env.MOCK_AGENTS !== "false";
-    this.mockDelayMs = options.mockDelayMs ?? 250;
+    this.agent = options.agent ?? createBrowserAgent(options);
+    this.sourceTimeoutMs = options.sourceTimeoutMs ?? 90_000;
+    this.sourceRetryCount = options.sourceRetryCount ?? 1;
   }
 
   start(intent: SearchIntent, sources: MarketplaceSource[]): SearchJob {
@@ -45,6 +53,7 @@ export class SearchJobManager {
       intent,
       sources,
       events: [],
+      listings: [],
       status: "running",
       done,
       resolveDone,
@@ -54,7 +63,6 @@ export class SearchJobManager {
     this.jobs.set(id, job);
     this.emit(job, { type: "job_started", jobId: id });
     void this.run(job);
-
     return job;
   }
 
@@ -71,38 +79,42 @@ export class SearchJobManager {
   }
 
   private async run(job: StoredSearchJob): Promise<void> {
-    await Promise.allSettled(
-      job.sources.map((source, index) =>
-        this.mockAgents ? this.runMockSource(job, source, index) : this.runUnavailableSource(job, source)
-      )
-    );
-
+    await Promise.allSettled(job.sources.map((source, index) => this.runSource(job, source, index)));
     job.status = "complete";
     this.emit(job, { type: "job_complete", jobId: job.id });
     job.resolveDone();
   }
 
-  private async runMockSource(job: StoredSearchJob, source: MarketplaceSource, index: number): Promise<void> {
+  private async runSource(job: StoredSearchJob, source: MarketplaceSource, sourceIndex: number): Promise<void> {
     this.emit(job, { type: "source_started", sourceId: source.id, sourceName: source.name });
-    this.emit(job, { type: "source_status", sourceId: source.id, status: "searching" });
-    await this.delay(this.mockDelayMs * (index + 1));
-    this.emit(job, { type: "source_status", sourceId: source.id, status: "extracting" });
-    await this.delay(this.mockDelayMs);
-
-    const listings = createMockListings(source, job.intent);
-    this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
-    this.emit(job, { type: "source_complete", sourceId: source.id, count: listings.length });
-  }
-
-  private async runUnavailableSource(job: StoredSearchJob, source: MarketplaceSource): Promise<void> {
-    this.emit(job, { type: "source_started", sourceId: source.id, sourceName: source.name });
-    this.emit(job, {
-      type: "source_status",
-      sourceId: source.id,
-      status: "error",
-      message: "Browser agents are not configured. Set MOCK_AGENTS=true for local development."
+    const controller = new AbortController();
+    const timeoutError = new Error("Marketplace search timed out");
+    let rejectTimeout!: (error: Error) => void;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectTimeout = reject;
     });
-    this.emit(job, { type: "source_complete", sourceId: source.id, count: 0 });
+    const timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      rejectTimeout(timeoutError);
+    }, this.sourceTimeoutMs);
+    let listings: Listing[] = [];
+
+    try {
+      const rawListings = await this.searchWithRetry(job, source, sourceIndex, controller, timeoutPromise);
+      listings = rankListings(dedupeListings(rawListings, job.listings), job.intent);
+      job.listings = rankListings([...job.listings, ...listings], job.intent);
+      this.emit(job, { type: "listing_batch", sourceId: source.id, listings });
+    } catch (error) {
+      this.emit(job, {
+        type: "source_status",
+        sourceId: source.id,
+        status: "error",
+        message: error instanceof Error ? error.message : "Marketplace search failed"
+      });
+    } finally {
+      clearTimeout(timeout);
+      this.emit(job, { type: "source_complete", sourceId: source.id, count: listings.length });
+    }
   }
 
   private emit(job: StoredSearchJob, event: SearchEvent): void {
@@ -110,34 +122,39 @@ export class SearchJobManager {
     for (const listener of job.listeners) listener(event);
   }
 
-  private delay(durationMs: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, durationMs));
+  private async searchWithRetry(
+    job: StoredSearchJob,
+    source: MarketplaceSource,
+    sourceIndex: number,
+    controller: AbortController,
+    timeoutPromise: Promise<never>
+  ): Promise<Listing[]> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= this.sourceRetryCount; attempt += 1) {
+      try {
+        return await Promise.race([
+          this.agent.search(source, job.intent, {
+            sourceIndex,
+            signal: controller.signal,
+            reportStatus: (status, message, liveSessionUrl) => {
+              if (!controller.signal.aborted) {
+                this.emit(job, { type: "source_status", sourceId: source.id, status, message, liveSessionUrl });
+              }
+            }
+          }),
+          timeoutPromise
+        ]);
+      } catch (error) {
+        lastError = error;
+        if (controller.signal.aborted || attempt === this.sourceRetryCount) throw error;
+        this.emit(job, {
+          type: "source_status",
+          sourceId: source.id,
+          status: "searching",
+          message: `Retrying marketplace search (${attempt + 1}/${this.sourceRetryCount})…`
+        });
+      }
+    }
+    throw lastError;
   }
-}
-
-function createMockListings(source: MarketplaceSource, intent: SearchIntent): Listing[] {
-  const basePrice = source.id === "ebay" ? 75 : source.id === "facebook" ? 60 : 50;
-  const price = intent.maxPrice === 0 ? 0 : Math.min(basePrice, intent.maxPrice ?? basePrice);
-  const location = intent.location?.raw ?? "Toronto, ON";
-  const path = source.domain.replace(/^https?:\/\//, "").replace(/\/$/, "");
-
-  return [1, 2].map((number) => {
-    const candidatePrice = price + (number - 1) * 5;
-
-    return {
-      id: `${source.id}-mock-${number}`,
-      sourceId: source.id,
-      sourceName: source.name,
-      title: `${intent.item} — ${number === 1 ? "great condition" : "local pickup"}`,
-      price: intent.maxPrice === undefined ? candidatePrice : Math.min(candidatePrice, intent.maxPrice),
-      currency: intent.currency ?? "CAD",
-      imageUrl: `https://images.example.com/${source.id}-${number}.jpg`,
-      url: `https://${path}/listing/${source.id}-mock-${number}`,
-      location,
-      condition: intent.condition === "any" ? "used" : intent.condition,
-      postedAt: FIXTURE_TIME,
-      extractedAt: FIXTURE_TIME,
-      confidence: 0.95
-    };
-  });
 }

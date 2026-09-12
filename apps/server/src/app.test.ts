@@ -14,7 +14,7 @@ describe("server", () => {
     const response = await app.inject({ method: "GET", url: "/health" });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: "ok", service: "gehackathon-server" });
+    expect(response.json()).toMatchObject({ status: "ok", service: "gehackathon-server", mode: "mock" });
   });
 
   it("returns the initial marketplace catalog", async () => {
@@ -38,6 +38,11 @@ describe("server", () => {
     const job = jobs.get(jobId);
     await job?.done;
     expect(job?.events.at(-1)).toEqual({ type: "job_complete", jobId });
+
+    const snapshot = await testApp.inject({ method: "GET", url: `/search/${jobId}` });
+    expect(snapshot.statusCode).toBe(200);
+    expect(snapshot.json()).toMatchObject({ jobId, status: "complete" });
+    expect(snapshot.json().listings).toHaveLength(2);
     await testApp.close();
   });
 

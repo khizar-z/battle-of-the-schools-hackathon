@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_SOURCES } from "@gehackathon/shared";
+import type { BrowserAgent } from "./agents/browser-agent.js";
 
 import { parseSearchIntent } from "./query-parser.js";
 import { SearchJobManager } from "./search-jobs.js";
@@ -18,5 +19,39 @@ describe("SearchJobManager", () => {
     expect(listingBatches).toHaveLength(2);
     expect(listingBatches.every((event) => event.listings.length === 2)).toBe(true);
     expect(listingBatches.flatMap((event) => event.listings).every((listing) => listing.price! <= 50)).toBe(true);
+  });
+
+  it("isolates a timed-out agent without blocking the job", async () => {
+    const stalledAgent: BrowserAgent = { search: () => new Promise(() => undefined) };
+    const jobs = new SearchJobManager({ agent: stalledAgent, sourceTimeoutMs: 1 });
+    const job = jobs.start(parseSearchIntent("used desk"), [DEFAULT_SOURCES[1]]);
+
+    await job.done;
+
+    expect(job.events).toContainEqual({
+      type: "source_status",
+      sourceId: "kijiji",
+      status: "error",
+      message: "Marketplace search timed out"
+    });
+    expect(job.events.at(-1)).toEqual({ type: "job_complete", jobId: job.id });
+  });
+
+  it("retries a recoverable source failure once", async () => {
+    let attempts = 0;
+    const flakyAgent: BrowserAgent = {
+      async search() {
+        attempts += 1;
+        if (attempts === 1) throw new Error("temporary upstream failure");
+        return [];
+      }
+    };
+    const jobs = new SearchJobManager({ agent: flakyAgent, sourceRetryCount: 1 });
+    const job = jobs.start(parseSearchIntent("used desk"), [DEFAULT_SOURCES[1]]);
+
+    await job.done;
+
+    expect(attempts).toBe(2);
+    expect(job.events).toContainEqual(expect.objectContaining({ message: "Retrying marketplace search (1/1)…" }));
   });
 });

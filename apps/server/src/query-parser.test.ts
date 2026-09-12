@@ -23,5 +23,13 @@ describe("parseSearchIntent", () => {
       condition: "any"
     });
   });
-});
 
+  it("recognizes a comma-separated city after a price constraint", () => {
+    expect(parseSearchIntent("Patagonia jacket under $80, Toronto")).toMatchObject({
+      item: "Patagonia jacket",
+      maxPrice: 80,
+      currency: "CAD",
+      location: { raw: "Toronto" }
+    });
+  });
+});
