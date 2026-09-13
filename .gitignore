@@ -7,3 +7,6 @@ coverage/
 data/site-recipes.json
 apps/server/data/
 .DS_Store
+
+# Steel profile IDs saved by the Facebook login reference program.
+Facebook_marketplace_login_works/.facebook-marketplace-profile.json

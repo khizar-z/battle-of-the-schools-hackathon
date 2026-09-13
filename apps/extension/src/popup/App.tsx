@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { Listing, MarketplaceSource } from "@gehackathon/shared";
-import { searchApi } from "../lib/api";
+import { DEFAULT_SOURCES } from "@gehackathon/shared";
+import { ApiError, searchApi } from "../lib/api";
 import { initialSearchState, searchReducer, type SourceProgress } from "../lib/search-state";
 import { loadSearchSession, openSearchWorkspace, saveSearchSession } from "../lib/search-session";
-import { defaultSources } from "../lib/sources";
 
 const phaseLabel: Record<SourceProgress["phase"], string> = {
   idle: "Queued",
@@ -15,6 +15,13 @@ const phaseLabel: Record<SourceProgress["phase"], string> = {
   needs_login: "Sign-in needed",
   skipped: "Not searched",
 };
+
+function describeSearchError(error: unknown): string {
+  if (error instanceof ApiError && error.status === 404) {
+    return "Scout’s server no longer has this search, so live updates stopped. Start the search again.";
+  }
+  return error instanceof Error ? error.message : "Live search updates failed.";
+}
 
 function formatPrice(listing: Listing): string {
   if (listing.price === undefined) return "Price not listed";
@@ -120,12 +127,11 @@ function WebListingCard({ listing }: { listing: Listing }) {
 
 export function App() {
   const [state, dispatch] = useReducer(searchReducer, initialSearchState);
-  const [sources, setSources] = useState<MarketplaceSource[]>(defaultSources);
+  const [sources, setSources] = useState<MarketplaceSource[]>(DEFAULT_SOURCES);
   const [sort, setSort] = useState<"relevance" | "price">("relevance");
   const [marketplaceFilter, setMarketplaceFilter] = useState("all");
   const [maxPrice, setMaxPrice] = useState("");
   const [storageReady, setStorageReady] = useState(false);
-  const cancelSubscription = useRef<(() => void) | null>(null);
   const restoredSourceIds = useRef<string[] | undefined>(undefined);
 
   const [isWorkspace, setIsWorkspace] = useState(() => {
@@ -166,19 +172,38 @@ export function App() {
     }).catch((error: unknown) => {
       if (live) dispatch({ type: "error", message: error instanceof Error ? error.message : "Could not load marketplaces." });
     });
-    return () => { live = false; cancelSubscription.current?.(); };
+    return () => { live = false; };
   }, [storageReady]);
 
   useEffect(() => {
     if (storageReady) void saveSearchSession(state);
   }, [state, storageReady]);
 
+  // Follow the live event stream for whichever job is running. This covers a
+  // search started from this page and a search restored from the saved
+  // session: the popup closes whenever it loses focus (for example when the
+  // Steel sign-in tab opens), which drops the stream mid-search. The server
+  // replays the job's full event log on every connection, so subscribing again
+  // rebuilds each marketplace's phase and its authoritative listing count.
   useEffect(() => {
     if (!storageReady || !state.jobId || state.status !== "running") return;
     let live = true;
-    void searchApi.getSearchJob(state.jobId).then((snapshot) => {
-      if (live && snapshot.status === "complete") dispatch({ type: "restore_snapshot", snapshot });
-    }).catch(() => undefined);
+    const cancel = searchApi.subscribe(
+      state.jobId,
+      (searchEvent) => { if (live) dispatch({ type: "event", event: searchEvent }); },
+      (error) => { if (live) dispatch({ type: "error", message: describeSearchError(error) }); },
+    );
+    return () => { live = false; cancel(); };
+  }, [state.jobId, state.status, storageReady]);
+
+  // Once a job is complete, show the server's final ranked, deduplicated feed
+  // rather than the order the batches happened to stream in.
+  useEffect(() => {
+    if (!storageReady || !state.jobId || state.status !== "complete") return;
+    let live = true;
+    void searchApi.getSearchJob(state.jobId)
+      .then((snapshot) => { if (live) dispatch({ type: "replace_listings", listings: snapshot.listings }); })
+      .catch(() => undefined);
     return () => { live = false; };
   }, [state.jobId, state.status, storageReady]);
 
@@ -193,22 +218,9 @@ export function App() {
       dispatch({ type: "error", message: "Choose at least one marketplace to search." });
       return;
     }
-    cancelSubscription.current?.();
     try {
       const { jobId } = await searchApi.startSearch(query, state.selectedSourceIds);
       dispatch({ type: "start", jobId, sourceIds: state.selectedSourceIds });
-      cancelSubscription.current = searchApi.subscribe(
-        jobId,
-        (searchEvent) => {
-          dispatch({ type: "event", event: searchEvent });
-          if (searchEvent.type === "job_complete") {
-            void searchApi.getSearchJob(jobId)
-              .then((snapshot) => dispatch({ type: "replace_listings", listings: snapshot.listings }))
-              .catch(() => undefined);
-          }
-        },
-        (error) => dispatch({ type: "error", message: error.message }),
-      );
     } catch (error) {
       dispatch({ type: "error", message: error instanceof Error ? error.message : "Could not start this search." });
     }

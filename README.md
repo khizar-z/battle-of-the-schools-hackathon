@@ -22,7 +22,7 @@ The server is available at `http://localhost:3000`; `GET /health` reports its st
 
 To build the extension against the local API, set `VITE_API_BASE_URL=http://localhost:3000` in `apps/extension/.env.local`, run `pnpm build`, then load `apps/extension/dist` as an unpacked Chromium extension.
 
-After searching, choose **Keep results open** to open a persistent Scout workspace tab. Listing links open separately, so the search results remain available. The popup itself closes when it loses focus, which is standard Chromium extension behavior.
+After searching, choose **Keep results open** to open a persistent Scout workspace tab. Listing links open separately, so the search results remain available. The popup itself closes when it loses focus, which is standard Chromium extension behavior. Closing the popup does not lose a running search: reopening it (or the workspace tab) resubscribes to the job's event stream, which the server replays from the beginning, so every marketplace's status and listing count is rebuilt accurately.
 
 ## Development search API
 
@@ -30,7 +30,7 @@ After searching, choose **Keep results open** to open a persistent Scout workspa
 
 `GET /search/:jobId` returns the latest normalized, deduplicated, ranked result snapshot. Scout sends each marketplace the user's original, broad wording and then uses the configured LLM to semantically judge the returned listing cards. This avoids brittle literal matches—for example, an automotive part called “housing” is not a UofT rental. When no model is configured or a request fails, the deterministic ranker remains available.
 
-To run a real browser session, set `MOCK_AGENTS=false` and provide `STEEL_API_KEY`. Live recipes currently search eBay and Kijiji through Steel browser sessions and emit a session-viewer URL in source-status events. Other enabled sources remain isolated failures until their recipes are added, so one unsupported marketplace never interrupts the overall search.
+To run a real browser session, set `MOCK_AGENTS=false` and provide `STEEL_API_KEY`. Live recipes currently search Facebook Marketplace, eBay, and Kijiji through Steel browser sessions and emit a session-viewer URL in source-status events. Other enabled sources remain isolated failures until their recipes are added, so one unsupported marketplace never interrupts the overall search.
 
 Housing and other ambiguous searches stay broad on every selected marketplace; Scout does not silently skip sources or force a category before it has seen their inventory. If a marketplace redirects a Steel session to sign-in, Scout presents an **Open sign-in** prompt and continues the search automatically after sign-in completes. Steel Profiles persist the signed-in browser state per marketplace in `data/steel-profiles.json`, so later searches reuse that login.
 

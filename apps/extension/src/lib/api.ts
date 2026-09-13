@@ -1,5 +1,5 @@
 import type { Listing, MarketplaceSource, SearchEvent, SearchJobSnapshot } from "@gehackathon/shared";
-import { defaultSources } from "./sources";
+import { DEFAULT_SOURCES } from "@gehackathon/shared";
 
 const baseUrl = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "");
 const mockMode = !baseUrl;
@@ -23,9 +23,17 @@ async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-function responseError(action: string, endpoint: string, response: Response): Error {
+/** An HTTP-level failure from the Scout API, keeping the status for callers to act on. */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+function responseError(action: string, endpoint: string, response: Response): ApiError {
   console.error("[Scout] API returned an error", { action, endpoint, status: response.status, statusText: response.statusText });
-  return new Error(`${action} (HTTP ${response.status}). See the extension console for details.`);
+  return new ApiError(`${action} (HTTP ${response.status}). See the extension console for details.`, response.status);
 }
 
 export interface SearchApi {
@@ -57,7 +65,7 @@ const listingsBySource: Record<string, Listing[]> = {
 function mockSubscription(jobId: string, sourceIds: string[], onEvent: (event: SearchEvent) => void): () => void {
   const events: Array<{ delay: number; event: SearchEvent }> = [{ delay: 0, event: { type: "job_started", jobId } }];
   sourceIds.forEach((sourceId, index) => {
-    const source = defaultSources.find((item) => item.id === sourceId);
+    const source = DEFAULT_SOURCES.find((item) => item.id === sourceId);
     if (!source) return;
     const offset = 250 + index * 280;
     events.push(
@@ -73,11 +81,13 @@ function mockSubscription(jobId: string, sourceIds: string[], onEvent: (event: S
   return () => timers.forEach(window.clearTimeout);
 }
 
-async function parseSse(response: Response, onEvent: (event: SearchEvent) => void): Promise<void> {
+/** Reads the SSE stream to its end and reports whether the job finished within it. */
+async function parseSse(response: Response, onEvent: (event: SearchEvent) => void): Promise<{ completed: boolean }> {
   if (!response.body) throw new Error("The event stream did not return a response body.");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -86,15 +96,19 @@ async function parseSse(response: Response, onEvent: (event: SearchEvent) => voi
     buffer = messages.pop() ?? "";
     messages.forEach((message) => {
       const data = message.split("\n").find((line) => line.startsWith("data:"))?.slice(5).trim();
-      if (data) onEvent(JSON.parse(data) as SearchEvent);
+      if (!data) return;
+      const event = JSON.parse(data) as SearchEvent;
+      if (event.type === "job_complete") completed = true;
+      onEvent(event);
     });
   }
+  return { completed };
 }
 
 export const searchApi: SearchApi = {
   isMock: mockMode,
   async getSources() {
-    if (mockMode) return defaultSources;
+    if (mockMode) return DEFAULT_SOURCES;
     const response = await fetchApi("/sources");
     if (!response.ok) throw responseError("Unable to load marketplaces", apiEndpoint("/sources"), response);
     const payload = await response.json() as MarketplaceSource[] | { sources: MarketplaceSource[] };
@@ -116,11 +130,15 @@ export const searchApi: SearchApi = {
   },
   async getSearchJob(jobId) {
     if (mockMode) {
+      // Demo jobs only live in this page's memory, so a job from a previous
+      // popup session behaves like a server that no longer has it.
+      const sourceIds = mockJobs.get(jobId);
+      if (!sourceIds) throw new ApiError("Demo search results are only available in the session that ran them.", 404);
       return {
         jobId,
         status: "complete",
         intent: { rawQuery: "demo", item: "dumbbells", condition: "any" },
-        listings: (mockJobs.get(jobId) ?? []).flatMap((sourceId) => listingsBySource[sourceId] ?? []),
+        listings: sourceIds.flatMap((sourceId) => listingsBySource[sourceId] ?? []),
       };
     }
     const response = await fetchApi(`/search/${jobId}`);
@@ -134,6 +152,12 @@ export const searchApi: SearchApi = {
       .then((response) => {
         if (!response.ok) throw responseError("Could not connect to live search updates", apiEndpoint(`/search/${jobId}/events`), response);
         return parseSse(response, onEvent);
+      })
+      .then(({ completed }) => {
+        // The server only closes the stream after job_complete, so an earlier
+        // close means the connection was lost. Surface it instead of leaving
+        // the popup in a permanent "Searching…" state.
+        if (!completed) onError(new Error("Live search updates ended before the search finished. Start the search again."));
       })
       .catch((error: unknown) => {
         if ((error as DOMException).name !== "AbortError") onError(error instanceof Error ? error : new Error("Event stream failed."));

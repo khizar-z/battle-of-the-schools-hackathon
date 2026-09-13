@@ -1,4 +1,4 @@
-import type { Listing, MarketplaceSource, SearchEvent, SearchJobSnapshot } from "@gehackathon/shared";
+import type { Listing, MarketplaceSource, SearchEvent } from "@gehackathon/shared";
 
 export type SearchStatus = "idle" | "running" | "complete" | "error";
 export type SourcePhase = "idle" | "searching" | "extracting" | "ranking" | "complete" | "error" | "needs_login" | "skipped";
@@ -33,7 +33,6 @@ export type SearchAction =
   | { type: "set_sources"; sourceIds: string[] }
   | { type: "toggle_source"; sourceId: string }
   | { type: "restore"; state: SearchState }
-  | { type: "restore_snapshot"; snapshot: SearchJobSnapshot }
   | { type: "start"; jobId: string; sourceIds: string[] }
   | { type: "replace_listings"; listings: Listing[] }
   | { type: "event"; event: SearchEvent }
@@ -66,22 +65,6 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
       };
     case "restore":
       return action.state;
-    case "restore_snapshot":
-      return {
-        ...state,
-        jobId: action.snapshot.jobId,
-        query: state.query || action.snapshot.intent.rawQuery,
-        status: action.snapshot.status,
-        listings: action.snapshot.listings,
-        sourceProgress: action.snapshot.status === "complete"
-          ? Object.fromEntries(Object.entries(state.sourceProgress).map(([sourceId, progress]) => [
-              sourceId,
-              progress.phase === "needs_login"
-                ? { ...progress, phase: "complete", message: "Search complete", liveSessionUrl: undefined }
-                : progress,
-            ]))
-          : state.sourceProgress,
-      };
     case "start":
       return {
         ...state,
@@ -118,6 +101,9 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
         );
       }
       if (event.type === "source_complete") {
+        // The server's count is authoritative. The running tally above only
+        // covers batches this client saw, which can be incomplete after the
+        // popup was closed and the event stream resumed.
         const current = state.sourceProgress[event.sourceId];
         if (current?.phase === "error" || current?.phase === "skipped") {
           return withProgress(state, event.sourceId, { count: event.count, liveSessionUrl: undefined });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Listing } from "@gehackathon/shared";
-import { initialSearchState, searchReducer } from "./search-state";
+import type { Listing, SearchEvent } from "@gehackathon/shared";
+import { initialSearchState, searchReducer, type SearchState } from "./search-state";
 
 const listing: Listing = {
   id: "listing-1",
@@ -62,20 +62,47 @@ describe("searchReducer", () => {
     expect(completed.sourceProgress.facebook).toEqual({ phase: "complete", message: "Search complete", count: 0, liveSessionUrl: undefined });
   });
 
-  it("clears a stale sign-in prompt when a completed job snapshot is restored", () => {
-    const waitingForLogin = {
+  it("rebuilds authoritative source counts when a saved session resumes the event stream", () => {
+    // Saved while the popup was closed during Facebook sign-in: Kijiji had
+    // finished, Facebook was still waiting for the user.
+    const facebookListing: Listing = { ...listing, id: "listing-2", sourceId: "facebook", sourceName: "Facebook Marketplace", url: "https://example.test/listing-2" };
+    const saved: SearchState = {
       ...initialSearchState,
       jobId: "job-123",
-      status: "running" as const,
+      status: "running",
+      selectedSourceIds: ["facebook", "kijiji"],
+      listings: [listing],
       sourceProgress: {
-        facebook: { phase: "needs_login" as const, count: 0, message: "Sign in", liveSessionUrl: "https://viewer.example.test" },
+        kijiji: { phase: "complete", count: 1, message: "Search complete" },
+        facebook: { phase: "needs_login", count: 0, message: "Sign in", liveSessionUrl: "https://viewer.example.test" },
       },
     };
-    const restored = searchReducer(waitingForLogin, {
-      type: "restore_snapshot",
-      snapshot: { jobId: "job-123", status: "complete", intent: { rawQuery: "chair", item: "chair" }, listings: [] },
-    });
+    const replayedLog: SearchEvent[] = [
+      { type: "job_started", jobId: "job-123" },
+      { type: "source_started", sourceId: "facebook", sourceName: "Facebook Marketplace" },
+      { type: "source_started", sourceId: "kijiji", sourceName: "Kijiji" },
+      { type: "listing_batch", sourceId: "kijiji", listings: [listing] },
+      { type: "source_complete", sourceId: "kijiji", count: 1 },
+      { type: "source_status", sourceId: "facebook", status: "needs_login", message: "Sign in", liveSessionUrl: "https://viewer.example.test" },
+      { type: "source_status", sourceId: "facebook", status: "extracting", message: "Reading Facebook Marketplace listing cards…" },
+      { type: "listing_batch", sourceId: "facebook", listings: [facebookListing] },
+      { type: "source_complete", sourceId: "facebook", count: 1 },
+      { type: "job_complete", jobId: "job-123" },
+    ];
 
-    expect(restored.sourceProgress.facebook).toMatchObject({ phase: "complete", liveSessionUrl: undefined });
+    const restored = searchReducer(initialSearchState, { type: "restore", state: saved });
+    const resumed = replayedLog.reduce((state, event) => searchReducer(state, { type: "event", event }), restored);
+
+    expect(resumed.status).toBe("complete");
+    expect(resumed.listings).toEqual([listing, facebookListing]);
+    expect(resumed.sourceProgress.facebook).toEqual({ phase: "complete", count: 1, message: "Search complete", liveSessionUrl: undefined });
+    expect(resumed.sourceProgress.kijiji).toEqual({ phase: "complete", count: 1, message: "Search complete", liveSessionUrl: undefined });
+  });
+
+  it("uses the server's completion count over the client's running tally", () => {
+    const started = searchReducer(initialSearchState, { type: "start", jobId: "job-123", sourceIds: ["facebook"] });
+    const completed = searchReducer(started, { type: "event", event: { type: "source_complete", sourceId: "facebook", count: 12 } });
+
+    expect(completed.sourceProgress.facebook).toMatchObject({ phase: "complete", count: 12 });
   });
 });

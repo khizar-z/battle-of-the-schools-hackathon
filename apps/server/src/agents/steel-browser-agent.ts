@@ -721,13 +721,6 @@ function normalizeFacebookListing(
   };
 }
 
-function isWithinPriceRange(listing: Listing, intent: SearchIntent): boolean {
-  if (listing.price === undefined) return intent.minPrice === undefined && intent.maxPrice === undefined;
-  if (intent.minPrice !== undefined && listing.price < intent.minPrice) return false;
-  if (intent.maxPrice !== undefined && listing.price > intent.maxPrice) return false;
-  return true;
-}
-
 function parsePrice(priceText: string | undefined): number | undefined {
   if (!priceText) return undefined;
   const value = Number.parseFloat(priceText.replace(/[^\d.,]/g, "").replaceAll(",", ""));
