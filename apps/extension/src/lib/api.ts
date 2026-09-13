@@ -40,6 +40,7 @@ export interface SearchApi {
   getSources(): Promise<MarketplaceSource[]>;
   startSearch(query: string, sources: string[]): Promise<{ jobId: string }>;
   getSearchJob(jobId: string): Promise<SearchJobSnapshot>;
+  cancelSearch(jobId: string): Promise<void>;
   subscribe(jobId: string, onEvent: (event: SearchEvent) => void, onError: (error: Error) => void): () => void;
   isMock: boolean;
 }
@@ -144,6 +145,14 @@ export const searchApi: SearchApi = {
     const response = await fetchApi(`/search/${jobId}`);
     if (!response.ok) throw responseError("Could not load the completed search results", apiEndpoint(`/search/${jobId}`), response);
     return response.json() as Promise<SearchJobSnapshot>;
+  },
+  async cancelSearch(jobId) {
+    // Demo searches only run as timers in this page, which the subscription
+    // cleanup clears; there is nothing to stop remotely.
+    if (mockMode) return;
+    const response = await fetchApi(`/search/${jobId}/cancel`, { method: "POST" });
+    // A job the server no longer has is already stopped.
+    if (!response.ok && response.status !== 404) throw responseError("Could not cancel this search", apiEndpoint(`/search/${jobId}/cancel`), response);
   },
   subscribe(jobId, onEvent, onError) {
     if (mockMode) return mockSubscription(jobId, mockJobs.get(jobId) ?? [], onEvent);

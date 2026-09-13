@@ -226,6 +226,15 @@ export function App() {
     }
   };
 
+  const handleCancel = () => {
+    const jobId = state.jobId;
+    // Update the UI immediately; the subscription effect drops the stream once
+    // the status leaves "running". Stopping the server job releases its
+    // browser sessions and is best-effort.
+    dispatch({ type: "cancel" });
+    if (jobId) void searchApi.cancelSearch(jobId).catch(() => undefined);
+  };
+
   const visibleListings = useMemo(() => {
     const priceLimit = Number(maxPrice);
     const filtered = state.listings.filter((listing) =>
@@ -264,6 +273,9 @@ export function App() {
               <button type="submit" disabled={state.status === "running"}>
                 {state.status === "running" ? "…" : "Search"}
               </button>
+              {state.status === "running" && (
+                <button type="button" className="cancel-button" onClick={handleCancel}>Cancel</button>
+              )}
             </div>
           </form>
 
@@ -337,6 +349,8 @@ export function App() {
               <p>
                 {state.status === "running"
                   ? "Scanning marketplaces live…"
+                  : state.status === "cancelled" && !state.listings.length
+                  ? "Search cancelled."
                   : state.listings.length
                   ? `${visibleListings.length} listing${visibleListings.length === 1 ? "" : "s"} found`
                   : "Enter a search in the sidebar to scan all secondhand marketplaces."}
@@ -364,7 +378,7 @@ export function App() {
                   <p>Agents are checking listings…</p>
                 </>
               ) : (
-                <p>No listings match those filters.</p>
+                <p>{state.status === "cancelled" ? "Search cancelled before any listings arrived." : "No listings match those filters."}</p>
               )}
             </div>
           )}
@@ -397,6 +411,9 @@ export function App() {
           <button type="submit" disabled={state.status === "running"}>
             {state.status === "running" ? "Searching…" : "Search"}
           </button>
+          {state.status === "running" && (
+            <button type="button" className="cancel-button" onClick={handleCancel}>Cancel</button>
+          )}
         </div>
       </form>
 
@@ -425,7 +442,7 @@ export function App() {
         <div className="results-heading">
           <div>
             <h2>Results {state.listings.length ? `(${state.listings.length})` : ""}</h2>
-            <p>{state.status === "running" ? "New finds appear as agents finish." : state.status === "complete" ? "Search complete." : "Your best local finds will appear here."}</p>
+            <p>{state.status === "running" ? "New finds appear as agents finish." : state.status === "complete" ? "Search complete." : state.status === "cancelled" ? "Search cancelled." : "Your best local finds will appear here."}</p>
           </div>
           {hasSearch && (
             <div className="results-actions">
@@ -477,7 +494,7 @@ export function App() {
         ) : (
           <div className="empty-state compact">
             <span className="loader" aria-hidden="true" />
-            <p>{state.status === "running" ? "Agents are checking listings…" : "No listings match those filters."}</p>
+            <p>{state.status === "running" ? "Agents are checking listings…" : state.status === "cancelled" ? "Search cancelled before any listings arrived." : "No listings match those filters."}</p>
           </div>
         )}
       </section>

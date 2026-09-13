@@ -61,6 +61,14 @@ export function buildApp(options: BuildAppOptions = {}) {
     return { jobId: job.id, status: job.status, intent: job.intent, listings: job.listings };
   });
 
+  app.post("/search/:jobId/cancel", (request, reply) => {
+    const { jobId } = request.params as { jobId: string };
+    const job = jobs.cancel(jobId);
+    if (!job) return reply.code(404).send({ error: "Search job not found" });
+
+    return { jobId: job.id, status: job.status };
+  });
+
   app.get("/search/:jobId/events", (request, reply) => {
     const { jobId } = request.params as { jobId: string };
     const job = jobs.get(jobId);

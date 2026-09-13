@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import { parseSearchIntent } from "../query-parser.js";
 import {
+  EBAY_CARD_SELECTOR,
   createEbaySearchUrl,
   createFacebookSearchUrl,
   createKijijiSearchUrl,
   extractFacebookPriceText,
+  hasEbayNoResultsText,
   hasKijijiNoResultsText,
+  isEbayErrorPage,
   isFacebookMarketplaceHome,
   parseProductRating,
   parseSellerRating
@@ -32,6 +35,17 @@ describe("marketplace browser recipes", () => {
     expect(createKijijiSearchUrl(parseSearchIntent("housing near uoft"))).toBe(
       "https://www.kijiji.ca/b-gta-greater-toronto-area/housing-near-uoft/k0l1700272"
     );
+  });
+
+  it("matches both eBay result-card layouts", () => {
+    expect(EBAY_CARD_SELECTOR.split(",").map((part) => part.trim())).toEqual(["li.s-card", "li.s-item"]);
+  });
+
+  it("recognizes eBay's no-exact-match and error pages", () => {
+    expect(hasEbayNoResultsText("0 results for housing near uoft\nNo exact matches found\nResults matching fewer words")).toBe(true);
+    expect(hasEbayNoResultsText("1,240 results for used dumbbells")).toBe(false);
+    expect(isEbayErrorPage("Error Page | eBay", "SORRY Something went wrong on our end 0.6fa71002")).toBe(true);
+    expect(isEbayErrorPage("Used Dumbbells for sale | eBay", "0 results for used dumbbells")).toBe(false);
   });
 
   it("recognizes Kijiji's successful empty-results page", () => {

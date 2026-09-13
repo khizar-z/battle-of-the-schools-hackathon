@@ -20,7 +20,11 @@ export interface SearchJob {
 interface StoredSearchJob extends SearchJob {
   resolveDone: () => void;
   listeners: Set<(event: SearchEvent) => void>;
+  controllers: Set<AbortController>;
+  cancelled: boolean;
 }
+
+const CANCELLED_MESSAGE = "Search cancelled";
 
 export interface SearchJobManagerOptions {
   agent?: BrowserAgent;
@@ -66,7 +70,9 @@ export class SearchJobManager {
       status: "running",
       done,
       resolveDone,
-      listeners: new Set()
+      listeners: new Set(),
+      controllers: new Set(),
+      cancelled: false
     };
 
     this.jobs.set(id, job);
@@ -77,6 +83,21 @@ export class SearchJobManager {
 
   get(jobId: string): SearchJob | undefined {
     return this.jobs.get(jobId);
+  }
+
+  /**
+   * Stops every source that is still running. Each source finishes through its
+   * normal completion path, so subscribers still receive source_complete and
+   * job_complete events and browser sessions are released.
+   */
+  cancel(jobId: string): SearchJob | undefined {
+    const job = this.jobs.get(jobId);
+    if (!job) return undefined;
+    if (job.status === "running" && !job.cancelled) {
+      job.cancelled = true;
+      for (const controller of job.controllers) controller.abort(new Error(CANCELLED_MESSAGE));
+    }
+    return job;
   }
 
   subscribe(jobId: string, listener: (event: SearchEvent) => void): (() => void) | undefined {
@@ -97,20 +118,14 @@ export class SearchJobManager {
   private async runSource(job: StoredSearchJob, source: MarketplaceSource, sourceIndex: number): Promise<void> {
     this.emit(job, { type: "source_started", sourceId: source.id, sourceName: source.name });
     const controller = new AbortController();
-    const timeoutError = new Error("Marketplace search timed out");
-    let rejectTimeout!: (error: Error) => void;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      rejectTimeout = reject;
-    });
+    job.controllers.add(controller);
+    if (job.cancelled) controller.abort(new Error(CANCELLED_MESSAGE));
     const timeoutMs = source.id === "facebook" ? Math.max(this.sourceTimeoutMs, this.facebookLoginTimeoutMs) : this.sourceTimeoutMs;
-    const timeout = setTimeout(() => {
-      controller.abort(timeoutError);
-      rejectTimeout(timeoutError);
-    }, timeoutMs);
+    const timeout = setTimeout(() => controller.abort(new Error("Marketplace search timed out")), timeoutMs);
     let listings: Listing[] = [];
 
     try {
-      const rawListings = await this.searchWithRetry(job, source, sourceIndex, controller, timeoutPromise);
+      const rawListings = await this.searchWithRetry(job, source, sourceIndex, controller);
       const candidates = dedupeListings(rawListings, job.listings);
       this.emit(job, {
         type: "source_status",
@@ -125,11 +140,12 @@ export class SearchJobManager {
       this.emit(job, {
         type: "source_status",
         sourceId: source.id,
-        status: "error",
-        message: error instanceof Error ? error.message : "Marketplace search failed"
+        status: job.cancelled ? "skipped" : "error",
+        message: job.cancelled ? CANCELLED_MESSAGE : error instanceof Error ? error.message : "Marketplace search failed"
       });
     } finally {
       clearTimeout(timeout);
+      job.controllers.delete(controller);
       this.emit(job, { type: "source_complete", sourceId: source.id, count: listings.length });
     }
   }
@@ -143,13 +159,16 @@ export class SearchJobManager {
     job: StoredSearchJob,
     source: MarketplaceSource,
     sourceIndex: number,
-    controller: AbortController,
-    timeoutPromise: Promise<never>
+    controller: AbortController
   ): Promise<Listing[]> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= this.sourceRetryCount; attempt += 1) {
+      throwIfAborted(controller.signal);
       try {
+        // A timeout or cancellation must end this attempt immediately even if
+        // the browser agent is blocked in a call that cannot observe the signal.
         return await Promise.race([
+          abortRejection(controller.signal),
           this.agent.search(source, job.intent, {
             sourceIndex,
             signal: controller.signal,
@@ -158,8 +177,7 @@ export class SearchJobManager {
                 this.emit(job, { type: "source_status", sourceId: source.id, status, message, liveSessionUrl });
               }
             }
-          }),
-          timeoutPromise
+          })
         ]);
       } catch (error) {
         lastError = error;
@@ -174,6 +192,18 @@ export class SearchJobManager {
     }
     throw lastError;
   }
+}
+
+function abortRejection(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    const fail = () => reject(signal.reason instanceof Error ? signal.reason : new Error("Search was cancelled"));
+    if (signal.aborted) fail();
+    else signal.addEventListener("abort", fail, { once: true });
+  });
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Search was cancelled");
 }
 
 function positiveIntegerFromEnvironment(name: string, fallback: number): number {

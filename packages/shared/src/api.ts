@@ -38,5 +38,6 @@ export interface MarketplaceSearchApi {
   createSearch(request: CreateSearchRequest): Promise<CreateSearchResponse>;
   listSources(): Promise<SourcesResponse>;
   getSearchJob(jobId: string): Promise<SearchJobSnapshot>;
+  cancelSearch(jobId: string): Promise<void>;
   subscribeToSearchEvents(jobId: string, onEvent: (event: SearchEvent) => void): () => void;
 }

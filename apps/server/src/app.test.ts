@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 
+import type { BrowserAgent } from "./agents/browser-agent.js";
 import { buildApp } from "./app.js";
 import { SearchJobManager } from "./search-jobs.js";
 
@@ -43,6 +44,23 @@ describe("server", () => {
     expect(snapshot.statusCode).toBe(200);
     expect(snapshot.json()).toMatchObject({ jobId, status: "complete" });
     expect(snapshot.json().listings).toHaveLength(2);
+    await testApp.close();
+  });
+
+  it("cancels a search job and reports unknown jobs", async () => {
+    const stalledAgent: BrowserAgent = { search: () => new Promise(() => undefined) };
+    const jobs = new SearchJobManager({ agent: stalledAgent });
+    const testApp = buildApp({ jobs });
+    const started = await testApp.inject({ method: "POST", url: "/search", payload: { query: "bike", sources: ["kijiji"] } });
+    const { jobId } = started.json();
+
+    const cancelled = await testApp.inject({ method: "POST", url: `/search/${jobId}/cancel` });
+    expect(cancelled.statusCode).toBe(200);
+    await jobs.get(jobId)?.done;
+    expect(jobs.get(jobId)?.status).toBe("complete");
+
+    const missing = await testApp.inject({ method: "POST", url: "/search/job_404/cancel" });
+    expect(missing.statusCode).toBe(404);
     await testApp.close();
   });
 

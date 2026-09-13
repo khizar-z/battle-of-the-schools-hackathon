@@ -1,6 +1,6 @@
 import type { Listing, MarketplaceSource, SearchEvent } from "@gehackathon/shared";
 
-export type SearchStatus = "idle" | "running" | "complete" | "error";
+export type SearchStatus = "idle" | "running" | "complete" | "cancelled" | "error";
 export type SourcePhase = "idle" | "searching" | "extracting" | "ranking" | "complete" | "error" | "needs_login" | "skipped";
 
 export interface SourceProgress {
@@ -35,6 +35,7 @@ export type SearchAction =
   | { type: "restore"; state: SearchState }
   | { type: "start"; jobId: string; sourceIds: string[] }
   | { type: "replace_listings"; listings: Listing[] }
+  | { type: "cancel" }
   | { type: "event"; event: SearchEvent }
   | { type: "error"; message: string };
 
@@ -77,6 +78,18 @@ export function searchReducer(state: SearchState, action: SearchAction): SearchS
       };
     case "replace_listings":
       return { ...state, listings: action.listings };
+    case "cancel": {
+      if (state.status !== "running") return state;
+      const finished = new Set<SourcePhase>(["complete", "error", "skipped"]);
+      return {
+        ...state,
+        status: "cancelled",
+        sourceProgress: Object.fromEntries(Object.entries(state.sourceProgress).map(([sourceId, progress]) => [
+          sourceId,
+          finished.has(progress.phase) ? progress : { ...progress, phase: "skipped", message: "Cancelled", liveSessionUrl: undefined },
+        ])),
+      };
+    }
     case "error":
       return { ...state, status: "error", error: action.message };
     case "event": {

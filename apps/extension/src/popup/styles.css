@@ -132,6 +132,18 @@ button, a {
   cursor: wait;
   opacity: 0.72;
 }
+.query-row .cancel-button,
+.web-sidebar .web-search-form .cancel-button {
+  background: transparent;
+  color: #203b31;
+  border-color: #203b31;
+}
+.query-row .cancel-button:hover:not(:disabled),
+.web-sidebar .web-search-form .cancel-button:hover:not(:disabled) {
+  background: #eef3ef;
+  border-color: #203b31;
+  color: #203b31;
+}
 
 .source-section, .activity-panel, .results-section {
   margin-top: 22px;

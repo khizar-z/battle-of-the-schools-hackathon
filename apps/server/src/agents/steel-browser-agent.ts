@@ -14,6 +14,12 @@ const FACEBOOK_MARKETPLACE_URL = "https://www.facebook.com/marketplace/";
 const FACEBOOK_LOGIN_POLL_MS = 3_000;
 const LOGIN_WAIT_MS = 300_000;
 const IMAGE_QUALITY_MAX_LISTINGS = boundedIntegerFromEnvironment("IMAGE_QUALITY_MAX_LISTINGS", 4, 1, 12);
+// eBay is migrating its search results from `li.s-item` cards to `li.s-card`
+// cards, and different pages can render either. Match both.
+export const EBAY_CARD_SELECTOR = "li.s-card, li.s-item";
+// eBay often answers the first request of a fresh browser session with a
+// transient error page and serves the same URL normally moments later.
+const EBAY_PAGE_ATTEMPTS = 3;
 
 interface SteelBrowserAgentOptions {
   apiKey: string;
@@ -34,10 +40,13 @@ interface ExtractedEbayListing {
   productRatingText?: string;
 }
 
+type EbayResultState = "results" | "near_matches" | "empty" | "error_page";
+
 interface ExtractedKijijiListing {
   title: string;
   url: string;
   priceText?: string;
+  imageUrl?: string;
   location?: string;
   description?: string;
 }
@@ -164,9 +173,19 @@ export class SteelBrowserAgent implements BrowserAgent {
       }
 
       if (isEbay) {
-        await page.waitForSelector(recipe?.resultSelector ?? "li.s-item", { timeout: PAGE_TIMEOUT_MS });
+        const resultState = await loadEbayResults(page, destination, context);
+        if (resultState === "empty") {
+          context.reportStatus("extracting", "eBay found no listings matching this search.");
+          await this.recipeStore.save(defaultRecipe(source));
+          return [];
+        }
+        if (resultState === "near_matches") {
+          context.reportStatus("extracting", "eBay found no exact matches. Evaluating its closest listings…");
+        }
         const extracted = await extractEbayListings(page);
-        const listings = extracted.map((listing, index) => normalizeEbayListing(listing, source, intent, index));
+        const listings = extracted.map((listing, index) =>
+          normalizeEbayListing(listing, source, intent, index, resultState === "near_matches" ? 0.6 : 0.9)
+        );
         await this.recipeStore.save(defaultRecipe(source));
         return this.assessListingImages(page, listings, context);
       }
@@ -181,6 +200,7 @@ export class SteelBrowserAgent implements BrowserAgent {
           context.reportStatus("extracting", "Kijiji found no listings matching this search.");
           return [];
         }
+        await revealLazyImages(page, context.signal);
         const extracted = await extractKijijiListings(page);
         const listings = extracted.map((listing, index) => normalizeKijijiListing(listing, source, index));
         await this.recipeStore.save(defaultRecipe(source));
@@ -238,10 +258,10 @@ function defaultRecipe(source: MarketplaceSource): SiteRecipe {
     domain: source.domain,
     searchUrlTemplate: ebay ? "https://www.ebay.ca/sch/i.html?_nkw={query}" : "https://www.kijiji.ca/b-gta-greater-toronto-area/{query}/k0l1700272",
     searchSteps: [{ action: "navigate", target: ebay ? "eBay search URL" : "Kijiji Toronto search URL" }],
-    resultSelector: ebay ? "li.s-item" : '[data-testid="listing-link"]',
+    resultSelector: ebay ? EBAY_CARD_SELECTOR : '[data-testid="listing-link"]',
     fieldSelectors: ebay
-      ? { title: ".s-item__title", price: ".s-item__price", image: ".s-item__image-img", url: "a.s-item__link" }
-      : { title: '[data-testid="listing-title"]', price: '[data-testid="listing-price"]', location: '[data-testid="listing-location"]', url: '[data-testid="listing-link"]' },
+      ? { title: ".s-card__title, .s-item__title", price: ".s-card__price, .s-item__price", image: "img.s-card__image, .s-item__image-img", url: "a.s-card__link, a.s-item__link" }
+      : { title: '[data-testid="listing-title"]', price: '[data-testid="listing-price"]', image: '[data-testid="listing-card-image"]', location: '[data-testid="listing-location"]', url: '[data-testid="listing-link"]' },
     learnedAt: new Date().toISOString()
   };
 }
@@ -391,6 +411,65 @@ async function waitForKijijiResultState(
   }
 
   throw new BrowserAgentError("Kijiji did not render listing cards or a no-results message.");
+}
+
+/**
+ * eBay renders result cards with either its legacy or its newer markup, shows
+ * a "0 results" heading followed by near-match cards when nothing matches the
+ * exact wording, and occasionally serves a transient error page. Waiting for
+ * one card selector alone times out on every one of those pages.
+ */
+async function loadEbayResults(
+  page: Page,
+  destination: string,
+  context: AgentSearchContext
+): Promise<Exclude<EbayResultState, "error_page">> {
+  for (let attempt = 1; attempt <= EBAY_PAGE_ATTEMPTS; attempt += 1) {
+    const state = await waitForEbayResultState(page, context.signal);
+    if (state !== "error_page") return state;
+    if (attempt === EBAY_PAGE_ATTEMPTS) break;
+    context.reportStatus("searching", `eBay returned a temporary error page. Reloading (${attempt}/${EBAY_PAGE_ATTEMPTS - 1})…`);
+    await waitForAbortableDelay(1_500, context.signal);
+    await page.goto(destination, { waitUntil: "domcontentloaded", timeout: PAGE_TIMEOUT_MS });
+  }
+  throw new BrowserAgentError("eBay kept returning a temporary error page instead of search results.");
+}
+
+async function waitForEbayResultState(page: Page, signal: AbortSignal): Promise<EbayResultState> {
+  const deadline = Date.now() + PAGE_TIMEOUT_MS;
+  const cards = page.locator(EBAY_CARD_SELECTOR);
+
+  while (Date.now() < deadline) {
+    throwIfAborted(signal);
+
+    let pageText: string;
+    let title: string;
+    try {
+      title = await page.title();
+      pageText = await page.locator("body").innerText({ timeout: 3_000 });
+    } catch (error) {
+      throw new BrowserAgentError(`eBay page became unavailable while checking search results: ${errorMessage(error)}`);
+    }
+    if (isEbayErrorPage(title, pageText)) return "error_page";
+
+    const noExactMatches = hasEbayNoResultsText(pageText);
+    if (await cards.count() > 0) return noExactMatches ? "near_matches" : "results";
+    if (noExactMatches) return "empty";
+
+    await waitForAbortableDelay(350, signal);
+  }
+
+  throw new BrowserAgentError("eBay did not render listing cards or a no-results message.");
+}
+
+export function hasEbayNoResultsText(value: string): boolean {
+  const text = value.replace(/\s+/g, " ").toLowerCase();
+  return /\b0 results for\b|\bno exact matches found\b/.test(text);
+}
+
+export function isEbayErrorPage(title: string, bodyText: string): boolean {
+  const text = bodyText.replace(/\s+/g, " ").toLowerCase();
+  return /^error page\b/i.test(title.trim()) || /something went wrong on our end/.test(text);
 }
 
 export function hasKijijiNoResultsText(value: string): boolean {
@@ -558,25 +637,48 @@ function delay(durationMs: number): Promise<void> {
 }
 
 async function extractEbayListings(page: Page): Promise<ExtractedEbayListing[]> {
-  return page.locator("li.s-item").evaluateAll((cards: Element[]) =>
-    cards.slice(0, 24).flatMap((card) => {
-      const title = card.querySelector(".s-item__title")?.textContent?.trim();
-      const link = card.querySelector("a.s-item__link") as HTMLAnchorElement | null;
+  return page.locator(EBAY_CARD_SELECTOR).evaluateAll((cards: Element[]) =>
+    cards.slice(0, 30).flatMap((card) => {
+      const title = card.querySelector(".s-card__title, .s-item__title")?.textContent?.trim();
+      const link = [...card.querySelectorAll<HTMLAnchorElement>("a.s-card__link[href], a.s-item__link[href]")]
+        .find((anchor) => /\/itm\//.test(anchor.href));
       const url = link?.href;
-      if (!title || !url || title.toLowerCase() === "shop on ebay") return [];
+      // eBay pads both layouts with a hidden "Shop on eBay" template card.
+      if (!title || !url || title.toLowerCase() === "shop on ebay" || /\/itm\/123456(?:[/?#]|$)/.test(url)) return [];
 
+      const cardText = (card as HTMLElement).innerText ?? card.textContent ?? "";
+      const ratingElement = card.querySelector('[aria-label*="out of 5"], .x-star-rating');
       return [{
         title,
         url,
-        priceText: card.querySelector(".s-item__price")?.textContent?.trim(),
-        imageUrl: (card.querySelector(".s-item__image-img") as HTMLImageElement | null)?.src,
-        condition: card.querySelector(".SECONDARY_INFO")?.textContent?.trim(),
-        productRatingText: card.querySelector('[aria-label*="out of 5"], .x-star-rating')?.getAttribute("aria-label")
-          ?? card.querySelector('[aria-label*="out of 5"], .x-star-rating')?.textContent?.trim(),
-        sellerRatingText: card.querySelector(".s-item__seller-info-text, [class*='seller']")?.textContent?.trim()
+        priceText: card.querySelector(".s-card__price, .s-item__price")?.textContent?.trim(),
+        imageUrl: (card.querySelector("img.s-card__image, .s-item__image-img") as HTMLImageElement | null)?.src,
+        condition: card.querySelector(".s-card__subtitle, .SECONDARY_INFO")?.textContent?.trim(),
+        productRatingText: ratingElement?.getAttribute("aria-label") ?? ratingElement?.textContent?.trim(),
+        sellerRatingText: cardText.match(/\d{1,3}(?:\.\d+)?%\s*positive/i)?.[0]
+          ?? card.querySelector(".s-item__seller-info-text, [class*='seller']")?.textContent?.trim()
       }];
     })
   );
+}
+
+/**
+ * Kijiji lazy-loads card photos as they scroll into view. A quick pass down
+ * the list gives every card a real image URL before extraction.
+ */
+async function revealLazyImages(page: Page, signal: AbortSignal): Promise<void> {
+  try {
+    const steps = 6;
+    for (let step = 1; step <= steps; step += 1) {
+      throwIfAborted(signal);
+      await page.evaluate((fraction) => window.scrollTo(0, document.body.scrollHeight * fraction), step / steps);
+      await waitForAbortableDelay(200, signal);
+    }
+    await page.evaluate(() => window.scrollTo(0, 0));
+  } catch (error) {
+    if (signal.aborted) throw error;
+    // Scrolling only improves image coverage; extraction proceeds without it.
+  }
 }
 
 async function extractKijijiListings(page: Page): Promise<ExtractedKijijiListing[]> {
@@ -587,15 +689,22 @@ async function extractKijijiListings(page: Page): Promise<ExtractedKijijiListing
       const url = anchor.href;
       if (!title || !url) return [];
 
-      let card: Element | null = anchor.parentElement;
-      while (card && !card.querySelector('[data-testid="listing-price"]')) card = card.parentElement;
+      // The price sits in a details block below the title; the photo is a
+      // sibling of that block inside the listing-card section.
+      let details: Element | null = anchor.parentElement;
+      while (details && !details.querySelector('[data-testid="listing-price"]')) details = details.parentElement;
+      const card = anchor.closest('[data-testid="listing-card"], li') ?? details;
+      const image = card?.querySelector('img[data-testid="listing-card-image"], img') as HTMLImageElement | null;
+      const imageUrl = [image?.currentSrc, image?.getAttribute("src"), image?.getAttribute("data-src"), image?.getAttribute("srcset")?.split(",")[0]?.trim().split(" ")[0]]
+        .find((candidate) => candidate?.startsWith("http"));
 
       return [{
         title,
         url,
-        priceText: card?.querySelector('[data-testid="listing-price"]')?.textContent?.trim(),
-        location: card?.querySelector('[data-testid="listing-location"]')?.textContent?.trim(),
-        description: card?.querySelector('[data-testid="listing-description"]')?.textContent?.trim()
+        priceText: details?.querySelector('[data-testid="listing-price"]')?.textContent?.trim(),
+        ...(imageUrl ? { imageUrl } : {}),
+        location: details?.querySelector('[data-testid="listing-location"]')?.textContent?.trim(),
+        description: details?.querySelector('[data-testid="listing-description"]')?.textContent?.trim()
       }];
     })
   );
@@ -605,7 +714,8 @@ function normalizeEbayListing(
   listing: ExtractedEbayListing,
   source: MarketplaceSource,
   intent: SearchIntent,
-  index: number
+  index: number,
+  confidence: number
 ): Listing {
   const price = parsePrice(listing.priceText);
   const canonicalUrl = new URL(listing.url);
@@ -624,7 +734,7 @@ function normalizeEbayListing(
     ...(parseProductRating(listing.productRatingText) === undefined ? {} : { productRating: parseProductRating(listing.productRatingText) }),
     ...(parseSellerRating(listing.sellerRatingText) === undefined ? {} : { sellerRating: parseSellerRating(listing.sellerRatingText) }),
     extractedAt: new Date().toISOString(),
-    confidence: 0.9
+    confidence
   };
 }
 
@@ -640,7 +750,7 @@ export function parseSellerRating(value: string | undefined): number | undefined
   if (!value) return undefined;
   const percentage = value.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*(?:positive|feedback)/i);
   if (percentage) {
-    const rating = Number.parseFloat(percentage[1]) / 20;
+    const rating = Math.round(Number.parseFloat(percentage[1]) * 5) / 100;
     return Number.isFinite(rating) ? Math.max(0, Math.min(5, rating)) : undefined;
   }
   return parseProductRating(value);
@@ -689,6 +799,7 @@ function normalizeKijijiListing(listing: ExtractedKijijiListing, source: Marketp
     title: listing.title,
     ...(price === undefined ? {} : { price }),
     currency: "CAD",
+    ...(listing.imageUrl?.startsWith("http") ? { imageUrl: listing.imageUrl } : {}),
     url: canonicalUrl.toString(),
     location: listing.location,
     description: listing.description,

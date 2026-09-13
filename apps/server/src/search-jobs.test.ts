@@ -37,6 +37,44 @@ describe("SearchJobManager", () => {
     expect(job.events.at(-1)).toEqual({ type: "job_complete", jobId: job.id });
   });
 
+  it("cancels a running job, completing every source as skipped", async () => {
+    let observedAbort = false;
+    const stalledAgent: BrowserAgent = {
+      search: (_source, _intent, context) => new Promise((_, reject) => {
+        context.signal.addEventListener("abort", () => {
+          observedAbort = true;
+          reject(context.signal.reason);
+        });
+      })
+    };
+    const jobs = new SearchJobManager({ agent: stalledAgent });
+    const job = jobs.start(parseSearchIntent("used desk"), DEFAULT_SOURCES.slice(0, 2));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(jobs.cancel(job.id)?.id).toBe(job.id);
+    await job.done;
+
+    expect(observedAbort).toBe(true);
+    expect(job.status).toBe("complete");
+    expect(job.events).toContainEqual({ type: "source_status", sourceId: "facebook", status: "skipped", message: "Search cancelled" });
+    expect(job.events).toContainEqual({ type: "source_status", sourceId: "kijiji", status: "skipped", message: "Search cancelled" });
+    expect(job.events).not.toContainEqual(expect.objectContaining({ status: "error" }));
+    expect(job.events.at(-1)).toEqual({ type: "job_complete", jobId: job.id });
+    expect(jobs.cancel("job_404")).toBeUndefined();
+  });
+
+  it("stops a source whose agent ignores the abort signal", async () => {
+    const deafAgent: BrowserAgent = { search: () => new Promise(() => undefined) };
+    const jobs = new SearchJobManager({ agent: deafAgent });
+    const job = jobs.start(parseSearchIntent("used desk"), [DEFAULT_SOURCES[1]]);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    jobs.cancel(job.id);
+    await job.done;
+
+    expect(job.events.at(-1)).toEqual({ type: "job_complete", jobId: job.id });
+  });
+
   it("retries a recoverable source failure once", async () => {
     let attempts = 0;
     const flakyAgent: BrowserAgent = {

@@ -99,6 +99,21 @@ describe("searchReducer", () => {
     expect(resumed.sourceProgress.kijiji).toEqual({ phase: "complete", count: 1, message: "Search complete", liveSessionUrl: undefined });
   });
 
+  it("cancels a running search by marking unfinished marketplaces as skipped", () => {
+    const started = searchReducer(initialSearchState, { type: "start", jobId: "job-123", sourceIds: ["kijiji", "facebook"] });
+    const withKijiji = searchReducer(started, { type: "event", event: { type: "listing_batch", sourceId: "kijiji", listings: [listing] } });
+    const kijijiDone = searchReducer(withKijiji, { type: "event", event: { type: "source_complete", sourceId: "kijiji", count: 1 } });
+    const waiting = searchReducer(kijijiDone, { type: "event", event: { type: "source_status", sourceId: "facebook", status: "needs_login", message: "Sign in", liveSessionUrl: "https://viewer.example.test" } });
+
+    const cancelled = searchReducer(waiting, { type: "cancel" });
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.listings).toEqual([listing]);
+    expect(cancelled.sourceProgress.kijiji).toMatchObject({ phase: "complete", count: 1 });
+    expect(cancelled.sourceProgress.facebook).toEqual({ phase: "skipped", count: 0, message: "Cancelled", liveSessionUrl: undefined });
+    expect(searchReducer(cancelled, { type: "cancel" })).toBe(cancelled);
+  });
+
   it("uses the server's completion count over the client's running tally", () => {
     const started = searchReducer(initialSearchState, { type: "start", jobId: "job-123", sourceIds: ["facebook"] });
     const completed = searchReducer(started, { type: "event", event: { type: "source_complete", sourceId: "facebook", count: 12 } });
