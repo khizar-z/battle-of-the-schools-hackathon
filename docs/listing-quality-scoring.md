@@ -1,5 +1,21 @@
 # Listing quality scoring
 
+## Relevance first
+
+A listing reaches the ranked feed only after the semantic judge (Claude or GPT)
+marks it relevant with a score of at least 60. The marketplace receives the
+user's broad wording, so keyword false positives such as Magic: The Gathering
+"House of Horror" cards for a housing search are expected and are removed here.
+A listing the model skipped in its response counts as not relevant.
+
+If the model call fails it is retried once, then the failure is logged and the
+deterministic fallback decides. The fallback is conservative: it keeps listings
+the marketplace itself returned as matches (extraction confidence 0.7 or
+higher) that fit the explicit budget, and drops anything the marketplace
+flagged as only a near match, such as eBay's "Results matching fewer words".
+A marketplace with no relevant inventory therefore contributes zero results
+rather than filler.
+
 Scout ranks relevant listings using search relevance, explicit budget fit,
 location, recency, listing completeness, available seller/product ratings, and
 visible product quality.

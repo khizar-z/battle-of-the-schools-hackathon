@@ -10,7 +10,7 @@
 [![Manifest V3](https://img.shields.io/badge/Extension-Manifest%20V3-4285f4?logo=googlechrome&logoColor=white)](apps/extension)
 [![Steel](https://img.shields.io/badge/Browser%20agents-Steel%20%2B%20Playwright-111)](https://steel.dev)
 [![Claude](https://img.shields.io/badge/Relevance%20judge-Claude%20Haiku%204.5-d97757)](https://www.anthropic.com)
-[![Tests](https://img.shields.io/badge/tests-51%20passing-2ea44f)](#quality)
+[![Tests](https://img.shields.io/badge/tests-54%20passing-2ea44f)](#quality)
 
 *Battle of the Schools · Web Agents track*
 
@@ -68,7 +68,7 @@ Every agent session is a **live, watchable browser**. Click **Watch live** in th
 | 🕸️ | **Real browser agents** | Each marketplace runs in its own Steel cloud browser driven by Playwright. No marketplace APIs, no feeds. |
 | 👀 | **Watchable sessions** | Every source status event carries a live session-viewer URL. Judges can watch the agent browse. |
 | 🔐 | **Human-in-the-loop login** | Facebook sign-in happens in the live browser, by you. Scout only checks that a session cookie *exists* and persists the opaque Steel profile ID for next time. Credentials, MFA codes, and cookie values never touch the server. |
-| ⚖️ | **Semantic relevance judge** | The marketplace gets your broad wording; Claude then scores every returned card against the full request. Irrelevant keyword matches are dropped before ranking. |
+| ⚖️ | **Semantic relevance judge** | The marketplace gets your broad wording; Claude then scores every returned card against the full request. Irrelevant keyword matches are dropped before ranking, and a marketplace with nothing relevant contributes zero results, never filler. |
 | 📸 | **Photo condition scoring** | For live searches, a vision model inspects the listing photo for visible wear, damage, and completeness, weighted by its own confidence. |
 | 🏅 | **Deterministic ranking** | Relevance, budget fit, recency, location, completeness, seller and product ratings. Exact URL and near-duplicate title/price/location matches are collapsed. |
 | 📡 | **Streaming, resumable results** | Server-Sent Events deliver listings per source. The server replays the full event log on reconnect, so closing the popup mid-search loses nothing. |
@@ -220,7 +220,7 @@ fixtures/      Deterministic contract data for tests and local development
 pnpm typecheck && pnpm test && pnpm build
 ```
 
-Strict TypeScript across all three packages. 51 Vitest tests cover the search reducer (including stream resume and cancellation), the job manager (timeouts, retries, isolation, cancel), marketplace recipes and page-state detection, ranking and deduplication, query parsing, the API routes, and cross-browser manifest constraints. Live-site behaviour for eBay, Kijiji, and Facebook was verified through real Steel sessions.
+Strict TypeScript across all three packages. 54 Vitest tests cover the search reducer (including stream resume and cancellation), the job manager (timeouts, retries, isolation, cancel), marketplace recipes and page-state detection, ranking and deduplication, query parsing, the API routes, and cross-browser manifest constraints. Live-site behaviour for eBay, Kijiji, and Facebook was verified through real Steel sessions.
 
 ## Privacy and safety
 
