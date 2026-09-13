@@ -71,20 +71,50 @@ function SignInPrompt({ sources, progress }: { sources: MarketplaceSource[]; pro
   );
 }
 
-function ListingCard({ listing }: { listing: Listing }) {
+/** Popup Widget Listing Card (Exact card from after that message) */
+function WidgetListingCard({ listing }: { listing: Listing }) {
   return (
     <article className="listing-card">
       <div className="listing-image">
         {listing.imageUrl ? <img src={listing.imageUrl} alt="" /> : <span aria-hidden="true">{listing.title.split(" ")[0].slice(0, 1)}</span>}
       </div>
       <div className="listing-content">
-        <div className="card-topline"><span className="badge">{listing.sourceName}</span>{listing.postedAt && <span className="freshness">{listing.postedAt}</span>}</div>
+        <div className="card-topline">
+          <span className="badge">{listing.sourceName}</span>
+          {listing.postedAt && <span className="freshness">{listing.postedAt}</span>}
+        </div>
         <h3>{listing.title}</h3>
         <p className="listing-price">{formatPrice(listing)}</p>
         <p className="listing-meta">{[listing.location, listing.condition].filter(Boolean).join(" · ") || "Details available on listing"}</p>
         <a className="open-listing" href={listing.url} target="_blank" rel="noreferrer">Open listing <span aria-hidden="true">↗</span></a>
       </div>
     </article>
+  );
+}
+
+/** Web Page Workspace Listing Card (Facebook Marketplace Photo-First Style) */
+function WebListingCard({ listing }: { listing: Listing }) {
+  return (
+    <a className="web-listing-card" href={listing.url} target="_blank" rel="noreferrer">
+      <div className="web-card-image-container">
+        {listing.imageUrl ? (
+          <img src={listing.imageUrl} alt={listing.title} loading="lazy" />
+        ) : (
+          <div className="web-card-image-fallback">
+            <span>{listing.sourceName.slice(0, 2).toUpperCase()}</span>
+          </div>
+        )}
+        <span className="source-tag">{listing.sourceName}</span>
+        {listing.postedAt && <span className="freshness-tag">{listing.postedAt}</span>}
+      </div>
+      <div className="web-card-content">
+        <div className="web-card-price">{formatPrice(listing)}</div>
+        <h3 className="web-card-title" title={listing.title}>{listing.title}</h3>
+        <p className="web-card-meta">
+          {[listing.location, listing.condition].filter(Boolean).join(" · ") || "Location on listing"}
+        </p>
+      </div>
+    </a>
   );
 }
 
@@ -97,7 +127,20 @@ export function App() {
   const [storageReady, setStorageReady] = useState(false);
   const cancelSubscription = useRef<(() => void) | null>(null);
   const restoredSourceIds = useRef<string[] | undefined>(undefined);
-  const isWorkspace = new URLSearchParams(window.location.search).get("view") === "workspace";
+
+  const [isWorkspace, setIsWorkspace] = useState(() => {
+    const param = new URLSearchParams(window.location.search).get("view");
+    return param === "workspace" || window.innerWidth >= 800;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      const param = new URLSearchParams(window.location.search).get("view");
+      setIsWorkspace(param === "workspace" || window.innerWidth >= 800);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -181,26 +224,184 @@ export function App() {
   }, [state.listings, marketplaceFilter, maxPrice, sort]);
 
   const hasSearch = state.status !== "idle" || state.listings.length > 0;
+
+  // =============================================================
+  // WEB PAGE (Facebook Marketplace Layout)
+  // =============================================================
+  if (isWorkspace) {
+    return (
+      <main className="web-workspace">
+        <aside className="web-sidebar">
+          <header className="web-sidebar-header">
+            <div className="brand">
+              <div className="brand-mark" aria-hidden="true">S</div>
+              <h1>Scout</h1>
+            </div>
+            {searchApi.isMock && <span className="demo-badge">Demo</span>}
+          </header>
+
+          <form className="web-search-form" onSubmit={handleSearch}>
+            <div className="query-row">
+              <input
+                id="web-query"
+                value={state.query}
+                onChange={(event) => dispatch({ type: "set_query", query: event.target.value })}
+                placeholder="Search secondhand..."
+                autoComplete="off"
+              />
+              <button type="submit" disabled={state.status === "running"}>
+                {state.status === "running" ? "…" : "Search"}
+              </button>
+            </div>
+          </form>
+
+          <section className="source-section" aria-label="Marketplace selection">
+            <div className="section-heading">
+              <h2>Marketplaces</h2>
+            </div>
+            <div className="source-list-vertical">
+              {sources.map((source) => (
+                <SourceToggle
+                  key={source.id}
+                  source={source}
+                  checked={state.selectedSourceIds.includes(source.id)}
+                  onToggle={() => dispatch({ type: "toggle_source", sourceId: source.id })}
+                />
+              ))}
+            </div>
+          </section>
+
+          <section className="filter-section" aria-label="Filters">
+            <div className="section-heading">
+              <h2>Filters</h2>
+            </div>
+            <div className="sidebar-filters">
+              <div className="filter-row">
+                <label htmlFor="web-sort">Sort by</label>
+                <select
+                  id="web-sort"
+                  value={sort}
+                  onChange={(event) => setSort(event.target.value as "relevance" | "price")}
+                >
+                  <option value="relevance">Relevance</option>
+                  <option value="price">Lowest price</option>
+                </select>
+              </div>
+              <div className="filter-row">
+                <label htmlFor="web-source-filter">Marketplace</label>
+                <select
+                  id="web-source-filter"
+                  value={marketplaceFilter}
+                  onChange={(event) => setMarketplaceFilter(event.target.value)}
+                >
+                  <option value="all">All marketplaces</option>
+                  {sources.map((source) => (
+                    <option key={source.id} value={source.id}>{source.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="filter-row">
+                <label htmlFor="web-max-price">Max price</label>
+                <input
+                  id="web-max-price"
+                  value={maxPrice}
+                  onChange={(event) => setMaxPrice(event.target.value.replace(/[^0-9]/g, ""))}
+                  inputMode="numeric"
+                  placeholder="$ Any"
+                />
+              </div>
+            </div>
+          </section>
+
+          {state.error && <div className="error-banner" role="alert">{state.error}</div>}
+          {hasSearch && <SignInPrompt sources={sources} progress={state.sourceProgress} />}
+          {hasSearch && <ActivityPanel sources={sources} selectedIds={state.selectedSourceIds} progress={state.sourceProgress} />}
+        </aside>
+
+        <section className="web-main" aria-live="polite">
+          <div className="web-results-heading">
+            <div>
+              <h2>{state.query ? `Results for "${state.query}"` : "Today's picks"}</h2>
+              <p>
+                {state.status === "running"
+                  ? "Scanning marketplaces live…"
+                  : state.listings.length
+                  ? `${visibleListings.length} listing${visibleListings.length === 1 ? "" : "s"} found`
+                  : "Enter a search in the sidebar to scan all secondhand marketplaces."}
+              </p>
+            </div>
+          </div>
+
+          {!hasSearch ? (
+            <div className="empty-state">
+              <span aria-hidden="true">⌕</span>
+              <h3>No search entered yet</h3>
+              <p>Type what you're looking for in the sidebar to search Facebook, Kijiji, and eBay simultaneously.</p>
+            </div>
+          ) : visibleListings.length ? (
+            <div className="web-listing-grid">
+              {visibleListings.map((listing) => (
+                <WebListingCard key={listing.id} listing={listing} />
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact">
+              {state.status === "running" ? (
+                <>
+                  <span className="loader" aria-hidden="true" />
+                  <p>Agents are checking listings…</p>
+                </>
+              ) : (
+                <p>No listings match those filters.</p>
+              )}
+            </div>
+          )}
+        </section>
+      </main>
+    );
+  }
+
+  // =============================================================
+  // EXTENSION POPUP WIDGET (Exact Layout & Structure from before)
+  // =============================================================
   return (
-    <main className={`app-shell${isWorkspace ? " workspace" : ""}`}>
+    <main className="app-shell">
       <header className="app-header">
         <div className="brand-mark" aria-hidden="true">S</div>
-        <div><p className="eyebrow">UNIVERSAL SECONDHAND SEARCH</p><h1>Scout</h1></div>
+        <h1>Scout</h1>
         {searchApi.isMock && <span className="demo-badge">Demo mode</span>}
       </header>
 
       <form className="search-form" onSubmit={handleSearch}>
         <label htmlFor="query">What are you looking for?</label>
         <div className="query-row">
-          <input id="query" value={state.query} onChange={(event) => dispatch({ type: "set_query", query: event.target.value })} placeholder="used dumbbells under $50 near Kensington" autoComplete="off" />
-          <button type="submit" disabled={state.status === "running"}>{state.status === "running" ? "Searching…" : "Search"}</button>
+          <input
+            id="query"
+            value={state.query}
+            onChange={(event) => dispatch({ type: "set_query", query: event.target.value })}
+            placeholder="used dumbbells under $50 near Kensington"
+            autoComplete="off"
+          />
+          <button type="submit" disabled={state.status === "running"}>
+            {state.status === "running" ? "Searching…" : "Search"}
+          </button>
         </div>
       </form>
 
       <section className="source-section" aria-label="Marketplace selection">
-        <div className="section-heading"><h2>Search on</h2><button type="button" className="text-button" title="Custom marketplaces are coming next">+ Add marketplace</button></div>
+        <div className="section-heading">
+          <h2>Search on</h2>
+          <button type="button" className="text-button" title="Custom marketplaces are coming next">+ Add marketplace</button>
+        </div>
         <div className="source-list">
-          {sources.map((source) => <SourceToggle key={source.id} source={source} checked={state.selectedSourceIds.includes(source.id)} onToggle={() => dispatch({ type: "toggle_source", sourceId: source.id })} />)}
+          {sources.map((source) => (
+            <SourceToggle
+              key={source.id}
+              source={source}
+              checked={state.selectedSourceIds.includes(source.id)}
+              onToggle={() => dispatch({ type: "toggle_source", sourceId: source.id })}
+            />
+          ))}
         </div>
       </section>
 
@@ -210,17 +411,63 @@ export function App() {
 
       <section className="results-section" aria-live="polite">
         <div className="results-heading">
-          <div><h2>Results {state.listings.length ? `(${state.listings.length})` : ""}</h2><p>{state.status === "running" ? "New finds appear as agents finish." : state.status === "complete" ? "Search complete." : "Your best local finds will appear here."}</p></div>
-          {hasSearch && <div className="results-actions">
-            {!isWorkspace && <button type="button" className="text-button workspace-button" onClick={() => { void saveSearchSession(state); openSearchWorkspace(); }}>Keep results open ↗</button>}
-            <div className="controls">
-              <select value={sort} onChange={(event) => setSort(event.target.value as "relevance" | "price")} aria-label="Sort results"><option value="relevance">Relevance</option><option value="price">Lowest price</option></select>
-              <select value={marketplaceFilter} onChange={(event) => setMarketplaceFilter(event.target.value)} aria-label="Filter by marketplace"><option value="all">All sources</option>{sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select>
-              <input value={maxPrice} onChange={(event) => setMaxPrice(event.target.value.replace(/[^0-9]/g, ""))} inputMode="numeric" placeholder="Max $" aria-label="Maximum price" />
+          <div>
+            <h2>Results {state.listings.length ? `(${state.listings.length})` : ""}</h2>
+            <p>{state.status === "running" ? "New finds appear as agents finish." : state.status === "complete" ? "Search complete." : "Your best local finds will appear here."}</p>
+          </div>
+          {hasSearch && (
+            <div className="results-actions">
+              <button
+                type="button"
+                className="text-button workspace-button"
+                onClick={() => {
+                  void saveSearchSession(state);
+                  openSearchWorkspace();
+                }}
+              >
+                Keep results open ↗
+              </button>
+              <div className="controls">
+                <select value={sort} onChange={(event) => setSort(event.target.value as "relevance" | "price")} aria-label="Sort results">
+                  <option value="relevance">Relevance</option>
+                  <option value="price">Lowest price</option>
+                </select>
+                <select value={marketplaceFilter} onChange={(event) => setMarketplaceFilter(event.target.value)} aria-label="Filter by marketplace">
+                  <option value="all">All sources</option>
+                  {sources.map((source) => (
+                    <option key={source.id} value={source.id}>{source.name}</option>
+                  ))}
+                </select>
+                <input
+                  value={maxPrice}
+                  onChange={(event) => setMaxPrice(event.target.value.replace(/[^0-9]/g, ""))}
+                  inputMode="numeric"
+                  placeholder="Max $"
+                  aria-label="Maximum price"
+                />
+              </div>
             </div>
-          </div>}
+          )}
         </div>
-        {!hasSearch ? <div className="empty-state"><span aria-hidden="true">⌕</span><h3>One search. Every good find.</h3><p>Pick your marketplaces and Scout’s agents will compare listings for you.</p></div> : visibleListings.length ? <div className="listing-grid">{visibleListings.map((listing) => <ListingCard key={listing.id} listing={listing} />)}</div> : <div className="empty-state compact"><span className="loader" aria-hidden="true" /><p>{state.status === "running" ? "Agents are checking listings…" : "No listings match those filters."}</p></div>}
+
+        {!hasSearch ? (
+          <div className="empty-state">
+            <span aria-hidden="true">⌕</span>
+            <h3>One search. Every good find.</h3>
+            <p>Pick your marketplaces and Scout’s agents will compare listings for you.</p>
+          </div>
+        ) : visibleListings.length ? (
+          <div className="listing-grid">
+            {visibleListings.map((listing) => (
+              <WidgetListingCard key={listing.id} listing={listing} />
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact">
+            <span className="loader" aria-hidden="true" />
+            <p>{state.status === "running" ? "Agents are checking listings…" : "No listings match those filters."}</p>
+          </div>
+        )}
       </section>
     </main>
   );
